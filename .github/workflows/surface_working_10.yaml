@@ -225,7 +225,7 @@ jobs:
 
       - name: Generate checksums
         run: |
-          cd "$GITHUB_WORKSPACE/surface-profile/out"
+          cd "$GITHUB_WORKSPACE/surface-profile/work/out"
 
           # 生成 SHA256 校验和
           sha256sum *.iso > SHA256SUMS
@@ -233,25 +233,16 @@ jobs:
           # 显示文件信息
           ls -lh
 
-      - name: Debug paths
-        run: |
-          echo "当前工作目录: $(pwd)"
-          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
-          echo "检查输出目录..."
-          ls -lh "$GITHUB_WORKSPACE/surface-profile/out/" || echo "目录不存在"
-          echo "ISO 文件:"
-          find "$GITHUB_WORKSPACE/surface-profile/out" -name "*.iso" -exec ls -lh {} \; || echo "未找到 ISO 文件"
-
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v5
         with:
           name: surface-laptop1-arch-live-iso
-          path: "$GITHUB_WORKSPACE/surface-profile/out/*.iso"
+          path: "$GITHUB_WORKSPACE/surface-profile/work/out/*.iso"
           retention-days: 90
 
       - name: Upload checksums
         uses: actions/upload-artifact@v5
         with:
           name: surface-laptop1-arch-checksums
-          path: "$GITHUB_WORKSPACE/surface-profile/out/SHA256SUMS"
+          path: "$GITHUB_WORKSPACE/surface-profile/work/out/SHA256SUMS"
           retention-days: 90
