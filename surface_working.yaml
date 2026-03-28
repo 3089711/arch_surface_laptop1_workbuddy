@@ -67,15 +67,19 @@ jobs:
           echo "检查 archiso 模板..."
           ls -la /usr/share/archiso/configs/releng/
 
+          # 使用 GITHUB_WORKSPACE 环境变量而非 github.workspace
+          # 创建 surface-profile 目录
+          mkdir -p "$GITHUB_WORKSPACE/surface-profile"
+
           # 使用 archiso 提供的模板
           echo "复制 archiso 模板..."
-          cp -r /usr/share/archiso/configs/releng/ "${{ github.workspace }}/surface-profile"
+          cp -r /usr/share/archiso/configs/releng/ "$GITHUB_WORKSPACE/surface-profile"
 
           # 验证目录是否创建成功
           echo "验证目录结构..."
-          ls -la "${{ github.workspace }}/"
+          ls -la "$GITHUB_WORKSPACE/"
 
-          cd "${{ github.workspace }}/surface-profile"
+          cd "$GITHUB_WORKSPACE/surface-profile"
 
           # 创建必要的目录
           mkdir -p airootfs/root
@@ -88,7 +92,7 @@ jobs:
         run: |
           # 初始化 pacman 密钥环
           pacman-key --init
-          
+
           # 导入 linux-surface GPG 密钥
           pacman-key --populate archlinux
           curl -s https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc | \
@@ -97,8 +101,8 @@ jobs:
 
       - name: Prepare configuration files
         run: |
-          cd "${{ github.workspace }}/surface-profile"
-          
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
           # 创建 pacman.conf 文件 - 使用 echo 逐行写入
           echo "[options]" > pacman.conf
           echo "HoldPkg = pacman glibc" >> pacman.conf
@@ -193,7 +197,7 @@ jobs:
 
       - name: Build ISO with mkarchiso
         run: |
-          cd "${{ github.workspace }}/surface-profile"
+          cd "$GITHUB_WORKSPACE/surface-profile"
 
           echo "开始构建 ISO..."
           echo "这需要 15-30 分钟,请耐心等待..."
@@ -207,7 +211,7 @@ jobs:
 
       - name: Generate checksums
         run: |
-          cd "${{ github.workspace }}/surface-profile/out"
+          cd "$GITHUB_WORKSPACE/surface-profile/out"
 
           # 生成 SHA256 校验和
           sha256sum *.iso > SHA256SUMS
@@ -219,12 +223,12 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: surface-laptop1-arch-live-iso
-          path: "${{ github.workspace }}/surface-profile/out/*.iso"
+          path: "$GITHUB_WORKSPACE/surface-profile/out/*.iso"
           retention-days: 90
 
       - name: Upload checksums
         uses: actions/upload-artifact@v5
         with:
           name: surface-laptop1-arch-checksums
-          path: "${{ github.workspace }}/surface-profile/out/SHA256SUMS"
+          path: "$GITHUB_WORKSPACE/surface-profile/out/SHA256SUMS"
           retention-days: 90
