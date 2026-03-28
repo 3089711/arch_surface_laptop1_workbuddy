@@ -1,0 +1,653 @@
+# Surface Laptop 1代 Arch Linux - GitHub Actions 自动构建脚本
+# 基于 linux-surface 项目: https://github.com/linux-surface/linux-surface
+
+name: Build Surface Laptop 1 Arch Linux Live Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: '内核版本 (留空使用最新)'
+        required: false
+        type: string
+        default: ''
+      include_chrome:
+        description: '包含 Chrome 浏览器'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install archiso and dependencies
+        run: |
+          # 更新系统
+          pacman -Syu --noconfirm --needed
+
+          # 安装 archiso 和构建依赖
+          pacman -S --noconfirm --needed \
+            archiso \
+            git \
+            base-devel \
+            sudo \
+            dosfstools \
+            squashfs-tools \
+            libarchive-tools \
+            syslinux \
+            grub \
+            edk2-shell
+
+      - name: Setup build environment
+        run: |
+          # 使用 archiso 提供的模板
+          cp -r /usr/share/archiso/configs/releng/ ${{ github.workspace }}/surface-profile
+
+          cd ${{ github.workspace }}/surface-profile
+
+          # 创建必要的目录
+          mkdir -p airootfs/root
+          mkdir -p airootfs/etc/systemd/system/getty@tty1.service.d
+          mkdir -p airootfs/etc/skel/.config/sway
+          mkdir -p airootfs/etc/environment.d
+          mkdir -p airootfs/etc/pacman.d
+
+
+      - name: Create pacman.conf with linux-surface repo
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          # 使用官方默认源 + linux-surface 仓库
+          printf '%s\n' \
+            '[options]' \
+            'HoldPkg = pacman glibc' \
+            'Architecture = auto' \
+            'Color' \
+            'CheckSpace' \
+            'ParallelDownloads = 5' \
+            'SigLevel = Required DatabaseOptional' \
+            '' \
+            '[core]' \
+            'Include = /etc/pacman.d/mirrorlist' \
+            '' \
+            '[extra]' \
+            'Include = /etc/pacman.d/mirrorlist' \
+            '' \
+            '[multilib]' \
+            'Include = /etc/pacman.d/mirrorlist' \
+            '' \
+            '[linux-surface]' \
+            'Server = https://pkg.surfacelinux.com/arch/' \
+            'SigLevel = Required' \
+            > pacman.conf
+
+          # 复制到 airootfs
+          cp pacman.conf airootfs/etc/pacman.conf
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+          # 复制到 airootfs
+          cp pacman.conf airootfs/etc/pacman.conf
+
+      - name: Import linux-surface GPG key
+        run: |
+          # 导入 linux-surface GPG 密钥
+          curl -s https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc | \
+            pacman-key --add -
+          pacman-key --lsign-key 56C464BAAC421453
+
+      - name: Create packages.x86_64
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          # 基础系统包列表
+          cat > packages.x86_64 << 'PACKAGES'
+# 内核与启动 - Surface Laptop 1代使用标准内核 + linux-surface
+linux
+linux-firmware
+linux-surface
+linux-surface-headers
+grub
+efibootmgr
+
+# Surface 触摸屏支持
+iptsd
+
+# Surface 专用固件
+surface-firmware
+
+# 触控板 X11 配置
+libinput
+
+# Marvell WiFi 固件 (Surface Laptop 1代需要)
+linux-firmware-marvell
+
+# 网络工具
+networkmanager
+network-manager-applet
+iw
+wpa_supplicant
+dhcpcd
+iwd
+openssh
+curl
+wget
+git
+vim
+
+# Wayland 桌面环境
+sway
+wayland
+wlroots
+seatd
+
+# 状态栏和启动器
+waybar
+wofi
+
+# 终端和文件管理
+kitty
+thunar
+gvfs
+
+# 浏览器
+firefox
+firefox-i18n-zh-cn
+
+# 输入法
+fcitx5
+fcitx5-im
+fcitx5-rime
+fcitx5-chinese-addons
+
+# 音频
+pipewire
+pipewire-pulse
+wireplumber
+pavucontrol
+alsa-utils
+
+# 电源管理
+auto-cpufreq
+powertop
+
+# Surface 工具
+surface-control
+surface-dtx-daemon
+
+# 系统工具
+sudo
+brightnessctl
+xorg-xinput
+
+# 字体
+ttf-jetbrains-mono-nerd
+noto-fonts-cjk
+noto-fonts-emoji
+
+# 压缩工具
+unzip
+unrar
+p7zip
+fuse2
+
+# 其他工具
+man-db
+man-pages
+texinfo
+PACKAGES
+
+      - name: Configure root user
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          # 创建自动登录配置
+          mkdir -p airootfs/etc/systemd/system/getty@tty1.service.d
+          cat > airootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf << 'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
+EOF
+
+          # 创建 root 的 .bash_profile
+          cat > airootfs/root/.bash_profile << 'EOF'
+#!/bin/bash
+
+# 显示欢迎信息
+clear
+echo "=========================================="
+echo "  Surface Laptop 1代 Arch Linux Live USB"
+echo "=========================================="
+echo ""
+
+# 获取 IP 地址
+IP=$(ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v 127.0.0.1 | head -n 1 || echo "未获取到")
+
+if [ "$IP" != "未获取到" ]; then
+    echo "IP 地址: $IP"
+    echo "SSH 端口: 22"
+    echo "用户名: root"
+    echo "密码: (默认无密码,请先用 passwd 设置)"
+    echo ""
+    echo "从其他设备连接: ssh root@$IP"
+    echo ""
+else
+    echo "未检测到网络连接"
+fi
+
+echo "=========================================="
+echo ""
+echo "可用命令:"
+echo "  setup-surface     - 一键配置 Surface"
+echo "  sway              - 启动 Wayland 桌面"
+echo "  nmtui             - 网络配置界面"
+echo "  wifi-menu         - Wi-Fi 菜单"
+echo ""
+echo "=========================================="
+echo ""
+
+# 检查是否在 SSH 会话中
+if [ -z "$SSH_CONNECTION" ]; then
+    # 本地启动,提示是否启动 sway
+    read -p "是否启动 Sway 桌面? [y/N] " answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+        # 设置环境变量
+        export XDG_SESSION_TYPE=wayland
+        export XDG_CURRENT_DESKTOP=sway
+        export WAYLAND_DISPLAY=wayland-0
+
+        # 启动 sway
+        exec sway
+    fi
+fi
+EOF
+
+          chmod +x airootfs/root/.bash_profile
+
+      - name: Create setup script
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          cat > airootfs/usr/local/bin/setup-surface << 'EOF'
+#!/bin/bash
+# Surface Laptop 1代 快速配置脚本
+
+set -e
+
+echo "=== Surface Laptop 1代 配置向导 ==="
+echo ""
+
+# 1. 设置 root 密码
+echo "[1/7] 设置 root 密码"
+passwd
+
+# 2. 启动网络
+echo "[2/7] 启用 NetworkManager"
+systemctl enable --now NetworkManager
+
+echo ""
+echo "请使用 nmtui 或 nmcli 连接 Wi-Fi"
+echo "示例: nmcli device wifi connect 'SSID' password '密码'"
+echo ""
+
+read -p "按 Enter 继续..."
+
+# 3. 启动 SSH
+echo "[3/7] 启用 SSH 服务"
+systemctl enable --now sshd
+
+# 4. 启动触摸屏服务
+echo "[4/7] 启用 IPTS 触摸屏服务"
+systemctl enable --now iptsd
+
+# 5. 配置电池阈值
+echo "[5/7] 设置电池阈值 80%"
+if command -v surface-control &> /dev/null; then
+    surface-control battery set-limit 80
+    echo "电池限制已设置为 80%"
+else
+    echo "surface-control 不可用,跳过"
+fi
+
+# 6. 配置输入法
+echo "[6/7] 配置中文输入法"
+
+mkdir -p /etc/environment.d
+cat > /etc/environment.d/90-fcitx.conf << 'ENVEOF'
+GTK_IM_MODULE=fcitx
+QT_IM_MODULE=fcitx
+XMODIFIERS=@im=fcitx
+INPUT_METHOD=fcitx5
+ENVEOF
+
+echo "输入法环境变量已配置"
+
+# 7. 复制 Sway 配置到 root
+echo "[7/7] 复制 Sway 配置"
+if [ -d /etc/skel/.config ]; then
+    cp -r /etc/skel/.config /root/
+    echo "Sway 配置已复制"
+fi
+
+echo ""
+echo "=========================================="
+echo "  配置完成!"
+echo "=========================================="
+echo ""
+echo "下一步:"
+echo "  1. 运行 'sway' 启动桌面"
+echo "  2. 按 Ctrl+Space 切换中文输入法"
+echo "  3. 触摸屏应该可以正常工作了"
+echo ""
+IP=$(ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v 127.0.0.1 | head -n 1)
+if [ -n "$IP" ]; then
+    echo "  4. 从其他设备: ssh root@$IP"
+fi
+echo "=========================================="
+EOF
+
+          chmod +x airootfs/usr/local/bin/setup-surface
+
+      - name: Create Sway configuration
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          mkdir -p airootfs/etc/skel/.config/sway
+
+          cat > airootfs/etc/skel/.config/sway/config << 'EOF'
+# Surface Laptop 1代 Sway 配置
+
+# HiDPI 配置 (Surface Laptop 1代 2256x1504 分辨率)
+output * scale 1.5
+
+# 触控板配置
+input type:touchpad {
+    tap enabled
+    natural_scroll enabled
+    dwt enabled
+    click_method clickfinger
+}
+
+# 字体
+font pango: JetBrains Mono Nerd Font 12
+
+# Mod 键 (Windows/Super 键)
+set $mod Mod4
+
+# 终端
+bindsym $mod+Return exec kitty
+
+# 启动器 (使用 wofi 替代 anyrun，更稳定)
+bindsym $mod+d exec wofi --show drun
+
+# 关闭窗口
+bindsym $mod+q kill
+
+# 全屏
+bindsym $mod+f fullscreen toggle
+
+# 工作区
+workspace 1 output eDP-1
+workspace 2 output eDP-1
+workspace 3 output eDP-1
+workspace 4 output eDP-1
+
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+
+# 重新加载配置
+bindsym $mod+Shift+r reload
+
+# 退出
+bindsym $mod+Shift+e exec swaynag -t warning -m '退出 Sway?' -B '是' 'sway exit'
+
+# 锁屏 (修复: 使用正确的按键绑定)
+bindsym $mod+Shift+l exec swaylock -f -c 000000
+
+# 睡眠
+bindsym $mod+Shift+s exec systemctl suspend
+
+# 音量
+bindsym XF86AudioRaiseVolume exec pactl set-sink-volume @DEFAULT_SINK@ +5%
+bindsym XF86AudioLowerVolume exec pactl set-sink-volume @DEFAULT_SINK@ -5%
+bindsym XF86AudioMute exec pactl set-sink-mute @DEFAULT_SINK@ toggle
+
+# 亮度
+bindsym XF86MonBrightnessUp exec brightnessctl set +5%
+bindsym XF86MonBrightnessDown exec brightnessctl set 5%-
+
+# 窗口边框
+default_border pixel 2
+default_floating_border pixel 2
+hide_edge_borders smart
+
+# 浮动窗口
+for_window [window_role="pop-up"] floating enable
+for_window [window_role="dialog"] floating enable
+
+# 自动启动
+exec --no-startup-id waybar &
+exec --no-startup-id fcitx5 -d &
+exec --no-startup-id dbus-update-activation-environment DISPLAY WAYLAND_DISPLAY XDG_CURRENT_DESKTOP=sway
+EOF
+
+      - name: Create profiledef.sh
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          cat > profiledef.sh << 'EOF'
+#!/usr/bin/env bash
+
+# Surface Laptop 1代 Arch Linux Live ISO 配置
+
+# ISO 名称
+iso_name="surface-laptop1-arch"
+
+# ISO 版本
+iso_version=$(date +%Y.%m.%d)
+
+# ISO 标签
+iso_label="SURFACE_L1_ARCH"
+
+# ISO 发布者
+iso_publisher="Surface Arch"
+
+# ISO 应用程序
+iso_application="Surface Laptop 1代 Arch Linux Live USB"
+
+# 安装目录
+install_dir="arch"
+
+# 工作目录
+workdir="work"
+
+# 输出目录
+outdir="out"
+
+# 引导模式
+bootmodes=('bios.syslinux.mbr' 'bios.syslinux.eltorito' 'uefi-x64.grub.esp' 'uefi-x64.grub.eltorito')
+
+# 架构
+arch="x86_64"
+
+# 验证签名
+verify_checksums="y"
+EOF
+
+          chmod +x profiledef.sh
+
+      - name: Build ISO with mkarchiso
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          echo "开始构建 ISO..."
+          echo "这需要 15-30 分钟,请耐心等待..."
+          echo ""
+
+          # 使用 archiso 官方工具构建
+          sudo mkarchiso -v -w work -o out .
+
+          echo ""
+          echo "构建完成!"
+
+      - name: Generate checksums
+        run: |
+          cd ${{ github.workspace }}/surface-profile/out
+
+          # 生成 SHA256 校验和
+          sha256sum *.iso > SHA256SUMS
+
+          # 显示文件信息
+          ls -lh
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop1-arch-live-iso
+          path: ${{ github.workspace }}/surface-profile/out/*.iso
+          retention-days: 90
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop1-arch-checksums
+          path: ${{ github.workspace }}/surface-profile/out/SHA256SUMS
+          retention-days: 90
+
+      - name: Create release info
+        run: |
+          cd ${{ github.workspace }}/surface-profile/out
+
+          # 创建发布说明 (使用双引号使变量展开)
+          cat > RELEASE_NOTES.md << EOF
+# Surface Laptop 1代 Arch Linux Live USB - 发布信息
+
+## 构建时间
+$(date '+%Y-%m-%d %H:%M:%S')
+
+## 文件说明
+- *.iso - 可启动的 Live USB 镜像
+- SHA256SUMS - 文件校验和
+
+## 刷入方法
+
+### macOS
+\`\`\`bash
+# 1. 查看磁盘
+diskutil list
+
+# 2. 卸载磁盘
+diskutil unmountDisk /dev/diskN
+
+# 3. 刷入镜像
+sudo dd if=surface-laptop1-arch-*.iso of=/dev/rdiskN bs=4m status=progress
+
+# 4. 弹出磁盘
+diskutil eject /dev/diskN
+\`\`\`
+
+### Linux
+\`\`\`bash
+sudo dd if=surface-laptop1-arch-*.iso of=/dev/sdX bs=4M status=progress oflag=sync
+sync
+\`\`\`
+
+### Windows
+使用 Rufus 或 Etcher 刷入
+
+## 首次启动
+
+1. 进入 UEFI: 按住音量+键,按电源键
+2. 禁用 Secure Boot
+3. 设置 USB 为第一启动项
+4. 从 U 盘启动
+
+## 首次配置
+
+启动后运行:
+\`\`\`bash
+setup-surface
+\`\`\`
+
+## 系统要求
+- Surface Laptop 第一代 (2017)
+- 至少 4GB RAM
+- 8GB+ U 盘
+
+## 包含软件
+- linux-surface 内核 (带 Surface 硬件支持)
+- IPTS 触摸屏驱动
+- Sway Wayland 桌面
+- Firefox 浏览器
+- fcitx5-rime 输入法
+- PipeWire 音频
+- SSH 服务器
+- Surface 硬件工具 (surface-control)
+
+## 注意事项
+- Surface Laptop 1代 使用 Marvell WiFi 芯片，已包含固件
+- 触摸屏需要 iptsd 服务，setup-surface 会自动启用
+- 电池限制默认设置为 80%，可保护电池寿命
+EOF
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ github.workspace }}/surface-profile/out/RELEASE_NOTES.md
+          retention-days: 90
