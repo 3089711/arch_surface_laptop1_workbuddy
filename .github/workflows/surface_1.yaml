@@ -1,0 +1,183 @@
+# Surface Laptop 1代 Arch Linux - GitHub Actions 自动构建脚本
+# 基于 linux-surface 项目: https://github.com/linux-surface/linux-surface
+
+name: Build Surface Laptop 1 Arch Linux Live Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: '内核版本 (留空使用最新)'
+        required: false
+        type: string
+        default: ''
+      include_chrome:
+        description: '包含 Chrome 浏览器'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+    
+    # 设置环境变量强制使用 Node.js 24
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install archiso and dependencies
+        run: |
+          # 更新系统
+          pacman -Syu --noconfirm --needed
+
+          # 安装 archiso 和构建依赖
+          pacman -S --noconfirm --needed \
+            archiso \
+            git \
+            base-devel \
+            sudo \
+            dosfstools \
+            squashfs-tools \
+            libarchive-tools \
+            syslinux \
+            grub \
+            edk2-shell
+
+      - name: Setup build environment
+        run: |
+          # 使用 archiso 提供的模板
+          cp -r /usr/share/archiso/configs/releng/ ${{ github.workspace }}/surface-profile
+
+          cd ${{ github.workspace }}/surface-profile
+
+          # 创建必要的目录
+          mkdir -p airootfs/root
+          mkdir -p airootfs/etc/systemd/system/getty@tty1.service.d
+          mkdir -p airootfs/etc/skel/.config/sway
+          mkdir -p airootfs/etc/environment.d
+          mkdir -p airootfs/etc/pacman.d
+
+
+      - name: Create pacman.conf with linux-surface repo
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          # 使用官方默认源 + linux-surface 仓库
+          python3 -c "open('pacman.conf','w').write('[options]\nHoldPkg = pacman glibc\nArchitecture = auto\nColor\nCheckSpace\nParallelDownloads = 5\nSigLevel = Required DatabaseOptional\n\n[core]\nInclude = /etc/pacman.d/mirrorlist\n\n[extra]\nInclude = /etc/pacman.d/mirrorlist\n\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n\n[linux-surface]\nServer = https://pkg.surfacelinux.com/arch/\nSigLevel = Required\n')"
+
+          # 复制到 airootfs
+          cp pacman.conf airootfs/etc/pacman.conf
+
+      - name: Import linux-surface GPG key
+        run: |
+          # 导入 linux-surface GPG 密钥
+          curl -s https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc | \
+            pacman-key --add -
+          pacman-key --lsign-key 56C464BAAC421453
+
+      - name: Create packages.x86_64
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          # 基础系统包列表（包含 Google Chrome 和 Logseq）
+          python3 -c "import base64; open('packages.x86_64','wb').write(base64.b64decode('bGludXgKbGludXgtZmlybXdhcmUKbGludXgtc3VyZmFjZQpsaW51eC1zdXJmYWNlLWhlYWRlcnMKZ3J1YgplZmlib290bWdyCmlwdHNkCnN1cmZhY2UtZmlybXdhcmUKbGliaW5wdXQKbGludXgtZmlybXdhcmUtbWFydmVsbApuZXR3b3JrbWFuYWdlcgpuZXR3b3JrLW1hbmFnZXItYXBwbGV0Cml3CndwYV9zdXBwbGljYW50CmRoY3BjZAppd2QKb3BlbnNzaApjdXJsCndnZXQKZ2l0CnZpbQpzd2F5CndheWxhbmQKd2xyb290cwpzZWF0ZAp3YXliYXIKd29maQpraXR0eQp0aHVuYXIKZ3ZmcwpmaXJlZm94CmZpcmVmb3gtaTE4bi16aC1jbgpmY2l0eDUKZmNpdHg1LWltCmZjaXR4NS1yaW1lCmZjaXR4NS1jaGluZXNlLWFkZG9ucwpwaXBld2lyZQpwaXBld2lyZS1wdWxzZQp3aXJlcGx1bWJlcgpwYXZ1Y29udHJvbAphbHNhLXV0aWxzCmF1dG8tY3B1ZnJlcQpwb3dlcnRvcApzdXJmYWNlLWNvbnRyb2wKc3VyZmFjZS1kdHgtZGFlbW9uCnN1ZG8KYnJpZ2h0bmVzc2N0bAp4b3JnLXhpbnB1dAp0dGYtamV0YnJhaW5zLW1vbm8tbmVyZApub3RvLWZvbnRzLWNqawpub3RvLWZvbnRzLWVtb2ppCnVuemlwCnVucmFyCnA3emlwCmZ1c2UyCm1hbi1kYgptYW4tcGFnZXMKdGV4aW5mbwpnb29nbGUtY2hyb21lCmxvZ3NlcS1kZXNrdG9wLWJpbg=='))"
+
+      - name: Configure root user
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          # 创建自动登录配置
+          mkdir -p airootfs/etc/systemd/system/getty@tty1.service.d
+          python3 -c "import base64; open('airootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf','wb').write(base64.b64decode('W1NlcnZpY2VdCkV4ZWNTdGFydD0KRXhlY1N0YXJ0PS0vc2Jpbi9hZ2V0dHkgLS1hdXRvbG9naW4gcm9vdCAtLW5vY2xlYXIgJUkgJFRFUk0='))"
+
+          # 创建 root 的 .bash_profile
+          python3 -c "import base64; open('airootfs/root/.bash_profile','wb').write(base64.b64decode('IyEvYmluL2Jhc2gKCiMg5pi+56S65qyi6L+O5L+h5oGvCmNsZWFyCmVjaG8gIj09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PSIKZWNobyAiICBTdXJmYWNlIExhcHRvcCAx5LujIEFyY2ggTGludXggTGl2ZSBVU0IiCmVjaG8gIj09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PSIKZWNobyAiIgoKIyDojrflj5YgSVAg5Zyw5Z2ACklQPSQoaXAgLTQgYWRkciBzaG93IDI+L2Rldi9udWxsIHwgZ3JlcCAtb1AgJyg/PD1pbmV0XHMpXGQrKFwuXGQrKXszfScgfCBncmVwIC12IDEyNy4wLjAuMSB8IGhlYWQgLW4gMSB8fCBlY2hvICLmnKrojrflj5bliLAiKQoKaWYgWyAiJElQIiAhPSAi5pyq6I635Y+W5YiwIiBdOyB0aGVuCiAgICBlY2hvICJJUCDlnLDlnYA6ICRJUCIKICAgIGVjaG8gIlNTSCDnq6/lj6M6IDIyIgogICAgZWNobyAi55So5oi35ZCNOiByb290IgogICAgZWNobyAi5a+G56CBOiAo6buY6K6k5peg5a+G56CBLOivt+WFiOeUqCBwYXNzd2Qg6K6+572uKSIKICAgIGVjaG8gIiIKICAgIGVjaG8gIuS7juWFtuS7luiuvuWkh+i/nuaOpTogc3NoIHJvb3RAJElQIgogICAgZWNobyAiIgplbHNlCiAgICBlY2hvICLmnKrmo4DmtYvliLDnvZHnu5zov57mjqUiCmZpCgplY2hvICI9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0iCmVjaG8gIiIKZWNobyAi5Y+v55So5ZG95LukOiIKZWNobyAiICBzZXR1cC1zdXJmYWNlICAgICAtIOS4gOmUrumFjee9riBTdXJmYWNlIgplY2hvICIgIHN3YXkgICAgICAgICAgICAgIC0g5ZCv5YqoIFdheWxhbmQg5qGM6Z2iIgplY2hvICIgIG5tdHVpICAgICAgICAgICAgIC0g572R57uc6YWN572u55WM6Z2iIgplY2hvICIgIHdpZmktbWVudSAgICAgICAgIC0gV2ktRmkg6I+c5Y2VIgplY2hvICIiCmVjaG8gIj09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PSIKZWNobyAiIgoKIyDmo4Dmn6XmmK/lkKblnKggU1NIIOS8muivneS4rQppZiBbIC16ICIkU1NIX0NPTk5FQ1RJT04iIF07IHRoZW4KICAgICMg5pys5Zyw5ZCv5YqoLOaPkOekuuaYr+WQpuWQr+WKqCBzd2F5CiAgICByZWFkIC1wICLmmK/lkKblkK/liqggU3dheSDmoYzpnaI/IFt5L05dICIgYW5zd2VyCiAgICBpZiBbWyAiJGFuc3dlciIgPX4gXltZeV0kIF1dOyB0aGVuCiAgICAgICAgIyDorr7nva7njq/looPlj5jph48KICAgICAgICBleHBvcnQgWERHX1NFU1NJT05fVFlQRT13YXlsYW5kCiAgICAgICAgZXhwb3J0IFhER19DVVJSRU5UX0RFU0tUT1A9c3dheQogICAgICAgIGV4cG9ydCBXQVlMQU5EX0RJU1BMQVk9d2F5bGFuZC0wCgogICAgICAgICMg5ZCv5YqoIHN3YXkKICAgICAgICBleGVjIHN3YXkKICAgIGZpCmZp'))"
+
+          chmod +x airootfs/root/.bash_profile
+
+      - name: Create setup script
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          python3 -c "import base64; open('airootfs/usr/local/bin/setup-surface','wb').write(base64.b64decode('IyEvYmluL2Jhc2gKIyBTdXJmYWNlIExhcHRvcCAx5LujIOW/q+mAn+mFjee9ruiEmuacrAoKc2V0IC1lCgplY2hvICI9PT0gU3VyZmFjZSBMYXB0b3AgMeS7oyDphY3nva7lkJHlr7wgPT09IgplY2hvICIiCgojIDEuIOiuvue9riByb290IOWvhueggQplY2hvICJbMS83XSDorr7nva4gcm9vdCDlr4bnoIEiCnBhc3N3ZAoKIyAyLiDlkK/liqjnvZHnu5wKZWNobyAiWzIvN10g5ZCv55SoIE5ldHdvcmtNYW5hZ2VyIgpzeXN0ZW1jdGwgZW5hYmxlIC0tbm93IE5ldHdvcmtNYW5hZ2VyCgplY2hvICIiCmVjaG8gIuivt+S9v+eUqCBubXR1aSDmiJYgbm1jbGkg6L+e5o6lIFdpLUZpIgplY2hvICLnpLrkvos6IG5tY2xpIGRldmljZSB3aWZpIGNvbm5lY3QgJ1NTSUQnIHBhc3N3b3JkICflr4bnoIEnIgplY2hvICIiCgpyZWFkIC1wICLmjIkgRW50ZXIg57un57utLi4uIgoKIyAzLiDlkK/liqggU1NICmVjaG8gIlszLzddIOWQr+eUqCBTU0gg5pyN5YqhIgpzeXN0ZW1jdGwgZW5hYmxlIC0tbm93IHNzaGQKCiMgNC4g5ZCv5Yqo6Kem5pG45bGP5pyN5YqhCmVjaG8gIls0LzddIOWQr+eUqCBJUFRTIOinpuaRuOWxj+acjeWKoSIKc3lzdGVtY3RsIGVuYWJsZSAtLW5vdyBpcHRzZAoKIyA1LiDphY3nva7nlLXmsaDpmIjlgLwKZWNobyAiWzUvN10g6K6+572u55S15rGg6ZiI5YC8IDgwJSIKaWYgY29tbWFuZCAtdiBzdXJmYWNlLWNvbnRyb2wgJj4gL2Rldi9udWxsOyB0aGVuCiAgICBzdXJmYWNlLWNvbnRyb2wgYmF0dGVyeSBzZXQtbGltaXQgODAKICAgIGVjaG8gIueUteaxoOmZkOWItuW3suiuvue9ruS4uiA4MCUiCmVsc2UKICAgIGVjaG8gInN1cmZhY2UtY29udHJvbCDkuI3lj6/nlKgs6Lez6L+HIgpmaQoKIyA2LiDphY3nva7ovpPlhaXms5UKZWNobyAiWzYvN10g6YWN572u5Lit5paH6L6T5YWl5rOVIgoKbWtkaXIgLXAgL2V0Yy9lbnZpcm9ubWVudC5kCmNhdCA+IC9ldGMvZW52aXJvbm1lbnQuZC85MC1mY2l0eC5jb25mIDw8ICdFTlZFT0YnCkdUS19JTV9NT0RVTEU9ZmNpdHgKUVRfSU1fTU9EVUxFPWZjaXR4ClhNT0RJRklFUlM9QGltPWZjaXR4CklOUFVUX01FVEhPRD1mY2l0eDUKRU5WRU9GCgplY2hvICLovpPlhaXms5Xnjq/looPlj5jph4/lt7LphY3nva4iCgojIDcuIOWkjeWItiBTd2F5IOmFjee9ruWIsCByb290CmVjaG8gIls3LzddIOWkjeWItiBTd2F5IOmFjee9riIKaWYgWyAtZCAvZXRjL3NrZWwvLmNvbmZpZyBdOyB0aGVuCiAgICBjcCAtciAvZXRjL3NrZWwvLmNvbmZpZyAvcm9vdC8KICAgIGVjaG8gIlN3YXkg6YWN572u5bey5aSN5Yi2IgpmaQoKZWNobyAiIgplY2hvICI9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT0iCmVjaG8gIiAg6YWN572u5a6M5oiQISIKZWNobyAiPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09IgplY2hvICIiCmVjaG8gIuS4i+S4gOatpToiCmVjaG8gIiAgMS4g6L+Q6KGMICdzd2F5JyDlkK/liqjmoYzpnaIiCmVjaG8gIiAgMi4g5oyJIEN0cmwrU3BhY2Ug5YiH5o2i5Lit5paH6L6T5YWl5rOVIgplY2hvICIgIDMuIOinpuaRuOWxj+W6lOivpeWPr+S7peato+W4uOW3peS9nOS6hiIKZWNobyAiIgpJUD0kKGlwIC00IGFkZHIgc2hvdyAyPi9kZXYvbnVsbCB8IGdyZXAgLW9QICcoPzw9aW5ldFxzKVxkKyhcLlxkKyl7M30nIHwgZ3JlcCAtdiAxMjcuMC4wLjEgfCBoZWFkIC1uIDEpCmlmIFsgLW4gIiRJUCIgXTsgdGhlbgogICAgZWNobyAiICA0LiDku47lhbbku5borr7lpIc6IHNzaCByb290QCRJUCIKZmkKZWNobyAiPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09Ig=='))"
+
+          chmod +x airootfs/usr/local/bin/setup-surface
+
+      - name: Create Sway configuration
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          mkdir -p airootfs/etc/skel/.config/sway
+
+          python3 -c "import base64; open('airootfs/etc/skel/.config/sway/config','wb').write(base64.b64decode('IyBTdXJmYWNlIExhcHRvcCAx5LujIFN3YXkg6YWN572uCgojIEhpRFBJIOmFjee9riAoU3VyZmFjZSBMYXB0b3AgMeS7oyAyMjU2eDE1MDQg5YiG6L6o546HKQpvdXRwdXQgKiBzY2FsZSAxLjUKCiMg6Kem5o6n5p2/6YWN572uCmlucHV0IHR5cGU6dG91Y2hwYWQgewogICAgdGFwIGVuYWJsZWQKICAgIG5hdHVyYWxfc2Nyb2xsIGVuYWJsZWQKICAgIGR3dCBlbmFibGVkCiAgICBjbGlja19tZXRob2QgY2xpY2tmaW5nZXIKfQoKIyDlrZfkvZMKZm9udCBwYW5nbzogSmV0QnJhaW5zIE1vbm8gTmVyZCBGb250IDEyCgojIE1vZCDplK4gKFdpbmRvd3MvU3VwZXIg6ZSuKQpzZXQgJG1vZCBNb2Q0CgojIOe7iOerrwpiaW5kc3ltICRtb2QrUmV0dXJuIGV4ZWMga2l0dHkKCiMg5ZCv5Yqo5ZmoICjkvb/nlKggd29maSDmm7/ku6MgYW55cnVu77yM5pu056iz5a6aKQpiaW5kc3ltICRtb2QrZCBleGVjIHdvZmkgLS1zaG93IGRydW4KCiMg5YWz6Zet56qX5Y+jCmJpbmRzeW0gJG1vZCtxIGtpbGwKCiMg5YWo5bGPCmJpbmRzeW0gJG1vZCtmIGZ1bGxzY3JlZW4gdG9nZ2xlCgojIOW3peS9nOWMugp3b3Jrc3BhY2UgMSBvdXRwdXQgZURQLTEKd29ya3NwYWNlIDIgb3V0cHV0IGVEUC0xCndvcmtzcGFjZSAzIG91dHB1dCBlRFAtMQp3b3Jrc3BhY2UgNCBvdXRwdXQgZURQLTEKCmJpbmRzeW0gJG1vZCsxIHdvcmtzcGFjZSBudW1iZXIgMQpiaW5kc3ltICRtb2QrMiB3b3Jrc3BhY2UgbnVtYmVyIDIKYmluZHN5bSAkbW9kKzMgd29ya3NwYWNlIG51bWJlciAzCmJpbmRzeW0gJG1vZCs0IHdvcmtzcGFjZSBudW1iZXIgNAoKYmluZHN5bSAkbW9kK1NoaWZ0KzEgbW92ZSBjb250YWluZXIgdG8gd29ya3NwYWNlIG51bWJlciAxCmJpbmRzeW0gJG1vZCtTaGlmdCsyIG1vdmUgY29udGFpbmVyIHRvIHdvcmtzcGFjZSBudW1iZXIgMgpiaW5kc3ltICRtb2QrU2hpZnQrMyBtb3ZlIGNvbnRhaW5lciB0byB3b3Jrc3BhY2UgbnVtYmVyIDMKYmluZHN5bSAkbW9kK1NoaWZ0KzQgbW92ZSBjb250YWluZXIgdG8gd29ya3NwYWNlIG51bWJlciA0CgojIOmHjeaWsOWKoOi9vemFjee9rgpiaW5kc3ltICRtb2QrU2hpZnQrciByZWxvYWQKCiMg6YCA5Ye6CmJpbmRzeW0gJG1vZCtTaGlmdCtlIGV4ZWMgc3dheW5hZyAtdCB3YXJuaW5nIC1tICfpgIDlh7ogU3dheT8nIC1CICfmmK8nICdzd2F5IGV4aXQnCgojIOmUgeWxjyAo5L+u5aSNOiDkvb/nlKjmraPnoa7nmoTmjInplK7nu5HlrpopCmJpbmRzeW0gJG1vZCtTaGlmdCtsIGV4ZWMgc3dheWxvY2sgLWYgLWMgMDAwMDAwCgojIOedoeecoApiaW5kc3ltICRtb2QrU2hpZnQrcyBleGVjIHN5c3RlbWN0bCBzdXNwZW5kCgojIOmfs+mHjwpiaW5kc3ltIFhGODZBdWRpb1JhaXNlVm9sdW1lIGV4ZWMgcGFjdGwgc2V0LXNpbmstdm9sdW1lIEBERUZBVUxUX1NJTktAICs1JQpiaW5kc3ltIFhGODZBdWRpb0xvd2VyVm9sdW1lIGV4ZWMgcGFjdGwgc2V0LXNpbmstdm9sdW1lIEBERUZBVUxUX1NJTktAIC01JQpiaW5kc3ltIFhGODZBdWRpb011dGUgZXhlYyBwYWN0bCBzZXQtc2luay1tdXRlIEBERUZBVUxUX1NJTktAIHRvZ2dsZQoKIyDkuq7luqYKYmluZHN5bSBYRjg2TW9uQnJpZ2h0bmVzc1VwIGV4ZWMgYnJpZ2h0bmVzc2N0bCBzZXQgKzUlCmJpbmRzeW0gWEY4Nk1vbkJyaWdodG5lc3NEb3duIGV4ZWMgYnJpZ2h0bmVzc2N0bCBzZXQgNSUtCgojIOeql+WPo+i+ueahhgpkZWZhdWx0X2JvcmRlciBwaXhlbCAyCmRlZmF1bHRfZmxvYXRpbmdfYm9yZGVyIHBpeGVsIDIKaGlkZV9lZGdlX2JvcmRlcnMgc21hcnQKCiMg5rWu5Yqo56qX5Y+jCmZvcl93aW5kb3cgW3dpbmRvd19yb2xlPSJwb3AtdXAiXSBmbG9hdGluZyBlbmFibGUKZm9yX3dpbmRvdyBbd2luZG93X3JvbGU9ImRpYWxvZyJdIGZsb2F0aW5nIGVuYWJsZQoKIyDoh6rliqjlkK/liqgKZXhlYyAtLW5vLXN0YXJ0dXAtaWQgd2F5YmFyICYKZXhlYyAtLW5vLXN0YXJ0dXAtaWQgZmNpdHg1IC1kICYKZXhlYyAtLW5vLXN0YXJ0dXAtaWQgZGJ1cy11cGRhdGUtYWN0aXZhdGlvbi1lbnZpcm9ubWVudCBESVNQTEFZIFdBWUxBTkRfRElTUExBWSBYREdfQ1VSUkVOVF9ERVNLVE9QPXN3YXk='))"
+
+      - name: Create profiledef.sh
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          python3 -c "import base64; open('profiledef.sh','wb').write(base64.b64decode('IyEvdXNyL2Jpbi9lbnYgYmFzaAoKIyBTdXJmYWNlIExhcHRvcCAx5LujIEFyY2ggTGludXggTGl2ZSBJU08g6YWN572uCgojIElTTyDlkI3np7AKaXNvX25hbWU9InN1cmZhY2UtbGFwdG9wMS1hcmNoIgoKIyBJU08g54mI5pysCmlzb192ZXJzaW9uPSQoZGF0ZSArJVkuJW0uJWQpCgojIElTTyDmoIfnrb4KaXNvX2xhYmVsPSJTVVJGQUNFX0wxX0FSQ0giCgojIElTTyDlj5HluIPogIUKaXNvX3B1Ymxpc2hlcj0iU3VyZmFjZSBBcmNoIgoKIyBJU08g5bqU55So56iL5bqPCmlzb19hcHBsaWNhdGlvbj0iU3VyZmFjZSBMYXB0b3AgMeS7oyBBcmNoIExpbnV4IExpdmUgVVNCIgoKIyDlronoo4Xnm67lvZUKaW5zdGFsbF9kaXI9ImFyY2giCgojIOW3peS9nOebruW9lQp3b3JrZGlyPSJ3b3JrIgoKIyDovpPlh7rnm67lvZUKb3V0ZGlyPSJvdXQiCgojIOW8leWvvOaooeW8jwpib290bW9kZXM9KCdiaW9zLnN5c2xpbnV4Lm1icicgJ2Jpb3Muc3lzbGludXguZWx0b3JpdG8nICd1ZWZpLXg2NC5ncnViLmVzcCcgJ3VlZmkteDY0LmdydWIuZWx0b3JpdG8nKQoKIyDmnrbmnoQKYXJjaD0ieDg2XzY0IgoKIyDpqozor4Hnrb7lkI0KdmVyaWZ5X2NoZWNrc3Vtcz0ieSI='))"
+
+          chmod +x profiledef.sh
+
+      - name: Build ISO with mkarchiso
+        run: |
+          cd ${{ github.workspace }}/surface-profile
+
+          echo "开始构建 ISO..."
+          echo "这需要 15-30 分钟,请耐心等待..."
+          echo ""
+
+          # 使用 archiso 官方工具构建
+          sudo mkarchiso -v -w work -o out .
+
+          echo ""
+          echo "构建完成!"
+
+      - name: Generate checksums
+        run: |
+          cd ${{ github.workspace }}/surface-profile/out
+
+          # 生成 SHA256 校验和
+          sha256sum *.iso > SHA256SUMS
+
+          # 显示文件信息
+          ls -lh
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop1-arch-live-iso
+          path: ${{ github.workspace }}/surface-profile/out/*.iso
+          retention-days: 90
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop1-arch-checksums
+          path: ${{ github.workspace }}/surface-profile/out/SHA256SUMS
+          retention-days: 90
+
+      - name: Create release info
+        run: |
+          cd ${{ github.workspace }}/surface-profile/out
+
+          # 创建发布说明
+          python3 -c "import base64,datetime; before=base64.b64decode('IyBTdXJmYWNlIExhcHRvcCAx5LujIEFyY2ggTGludXggTGl2ZSBVU0IgLSDlj5HluIPkv6Hmga8KCiMjIOaehOW7uuaXtumXtAo=').decode(); after=base64.b64decode('CiMjIOaWh+S7tuivtOaYjgotICouaXNvIC0g5Y+v5ZCv5Yqo55qEIExpdmUgVVNCIOmVnOWDjwotIFNIQTI1NlNVTVMgLSDmlofku7bmoKHpqozlkowKCiMjIOWIt+WFpeaWueazlQoKIyMjIG1hY09TCmBgYGJhc2gKIyAxLiDmn6XnnIvno4Hnm5gKZGlza3V0aWwgbGlzdAoKIyAyLiDljbjovb3no4Hnm5gKZGlza3V0aWwgdW5tb3VudERpc2sgL2Rldi9kaXNrTgoKIyAzLiDliLflhaXplZzlg48Kc3VkbyBkZCBpZj1zdXJmYWNlLWxhcHRvcDEtYXJjaC0qLmlzbyBvZj0vZGV2L3JkaXNrTiBicz00bSBzdGF0dXM9cHJvZ3Jlc3MKCiMgNC4g5by55Ye656OB55uYCmRpc2t1dGlsIGVqZWN0IC9kZXYvZGlza04KYGBgCgojIyMgTGludXgKYGBgYmFzaApzdWRvIGRkIGlmPXN1cmZhY2UtbGFwdG9wMS1hcmNoLSouaXNvIG9mPS9kZXYvc2RYIGJzPTRNIHN0YXR1cz1wcm9ncmVzcyBvZmxhZz1zeW5jCnN5bmMKYGBgCgojIyMgV2luZG93cwrkvb/nlKggUnVmdXMg5oiWIEV0Y2hlciDliLflhaUKCiMjIOmmluasoeWQr+WKqAoKMS4g6L+b5YWlIFVFRkk6IOaMieS9j+mfs+mHjyvplK4s5oyJ55S15rqQ6ZSuCjIuIOemgeeUqCBTZWN1cmUgQm9vdAozLiDorr7nva4gVVNCIOS4uuesrOS4gOWQr+WKqOmhuQo0LiDku44gVSDnm5jlkK/liqgKCiMjIOmmluasoemFjee9rgoK5ZCv5Yqo5ZCO6L+Q6KGMOgpgYGBiYXNoCnNldHVwLXN1cmZhY2UKYGBgCgojIyDns7vnu5/opoHmsYIKLSBTdXJmYWNlIExhcHRvcCDnrKzkuIDku6MgKDIwMTcpCi0g6Iez5bCRIDRHQiBSQU0KLSA4R0IrIFUg55uYCgojIyDljIXlkKvova/ku7YKLSBsaW51eC1zdXJmYWNlIOWGheaguCAo5bimIFN1cmZhY2Ug56Gs5Lu25pSv5oyBKQotIElQVFMg6Kem5pG45bGP6amx5YqoCi0gU3dheSBXYXlsYW5kIOahjOmdogotIEZpcmVmb3gg5rWP6KeI5ZmoCi0gZmNpdHg1LXJpbWUg6L6T5YWl5rOVCi0gUGlwZVdpcmUg6Z+z6aKRCi0gU1NIIOacjeWKoeWZqAotIFN1cmZhY2Ug56Gs5Lu25bel5YW3IChzdXJmYWNlLWNvbnRyb2wpCgojIyDms6jmhI/kuovpobkKLSBTdXJmYWNlIExhcHRvcCAx5LujIOS9v+eUqCBNYXJ2ZWxsIFdpRmkg6Iqv54mH77yM5bey5YyF5ZCr5Zu65Lu2Ci0g6Kem5pG45bGP6ZyA6KaBIGlwdHNkIOacjeWKoe+8jHNldHVwLXN1cmZhY2Ug5Lya6Ieq5Yqo5ZCv55SoCi0g55S15rGg6ZmQ5Yi26buY6K6k6K6+572u5Li6IDgwJe+8jOWPr+S/neaKpOeUteaxoOWvv+WRvQo=').decode(); ts=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'); open('RELEASE_NOTES.md','w').write(before+ts+after)"
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: ${{ github.workspace }}/surface-profile/out/RELEASE_NOTES.md
+          retention-days: 90
