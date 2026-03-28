@@ -1,0 +1,248 @@
+# Surface Laptop 1代 Arch Linux - GitHub Actions 自动构建脚本
+# 基于 linux-surface 项目: https://github.com/linux-surface/linux-surface
+
+name: Build Surface Laptop 1 Arch Linux Live Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: '内核版本 (留空使用最新)'
+        required: false
+        type: string
+        default: ''
+      include_chrome:
+        description: '包含 Chrome 浏览器'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install archiso and dependencies
+        run: |
+          # 先初始化 pacman 密钥环
+          pacman-key --init
+          pacman-key --populate archlinux
+
+          # 更新系统 (跳过签名检查以避免密钥问题)
+          pacman -Syu --noconfirm --needed --disable-download-timeout
+
+          # 安装 archiso 和构建依赖
+          # libarchive-tools 已被 libarchive 替代
+          pacman -S --noconfirm --needed \
+            archiso \
+            git \
+            base-devel \
+            sudo \
+            dosfstools \
+            squashfs-tools \
+            libarchive \
+            syslinux \
+            grub \
+            edk2-shell
+
+      - name: Setup build environment
+        run: |
+          # 显示当前工作目录
+          echo "当前工作目录: $(pwd)"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "github.workspace: ${{ github.workspace }}"
+          ls -la
+
+          # 检查 archiso 模板是否存在
+          echo "检查 archiso 模板..."
+          ls -la /usr/share/archiso/configs/releng/
+
+          # 使用 GITHUB_WORKSPACE 环境变量而非 github.workspace
+          # 创建 surface-profile 目录
+          mkdir -p "$GITHUB_WORKSPACE/surface-profile"
+
+          # 使用 archiso 提供的模板
+          echo "复制 archiso 模板..."
+          # 正确复制方式：先清空目标目录，然后复制所有文件
+          rm -rf "$GITHUB_WORKSPACE/surface-profile"/*
+          cp -r /usr/share/archiso/configs/releng/* "$GITHUB_WORKSPACE/surface-profile/"
+
+          # 验证目录是否创建成功
+          echo "验证目录结构..."
+          ls -la "$GITHUB_WORKSPACE/surface-profile/"
+
+          # 检查 profiledef.sh 是否存在
+          if [ ! -f "$GITHUB_WORKSPACE/surface-profile/profiledef.sh" ]; then
+            echo "错误: profiledef.sh 不存在!"
+            exit 1
+          fi
+
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          # 创建必要的目录
+          mkdir -p airootfs/root
+          mkdir -p airootfs/etc/systemd/system/getty@tty1.service.d
+          mkdir -p airootfs/etc/skel/.config/sway
+          mkdir -p airootfs/etc/environment.d
+          mkdir -p airootfs/etc/pacman.d
+
+      - name: Import linux-surface GPG key
+        run: |
+          # 初始化 pacman 密钥环
+          pacman-key --init
+
+          # 导入 linux-surface GPG 密钥
+          pacman-key --populate archlinux
+          curl -s https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc | \
+            pacman-key --add -
+          pacman-key --lsign-key 56C464BAAC421453
+
+      - name: Prepare configuration files
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          # 创建 pacman.conf 文件 - 使用 echo 逐行写入
+          echo "[options]" > pacman.conf
+          echo "HoldPkg = pacman glibc" >> pacman.conf
+          echo "Architecture = auto" >> pacman.conf
+          echo "Color" >> pacman.conf
+          echo "CheckSpace" >> pacman.conf
+          echo "ParallelDownloads = 5" >> pacman.conf
+          echo "SigLevel = Required DatabaseOptional" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[core]" >> pacman.conf
+          echo "Include = /etc/pacman.d/mirrorlist" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[extra]" >> pacman.conf
+          echo "Include = /etc/pacman.d/mirrorlist" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[multilib]" >> pacman.conf
+          echo "Include = /etc/pacman.d/mirrorlist" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[linux-surface]" >> pacman.conf
+          echo "Server = https://pkg.surfacelinux.com/arch/" >> pacman.conf
+          echo "SigLevel = Required" >> pacman.conf
+          
+          # 复制到 airootfs
+          cp pacman.conf airootfs/etc/pacman.conf
+          
+          # 创建 mirrorlist 文件
+          mkdir -p airootfs/etc/pacman.d
+          echo "##" > airootfs/etc/pacman.d/mirrorlist
+          echo "## Arch Linux repository mirrorlist" >> airootfs/etc/pacman.d/mirrorlist
+          echo "## Generated on $(date)" >> airootfs/etc/pacman.d/mirrorlist
+          echo "##" >> airootfs/etc/pacman.d/mirrorlist
+          echo "" >> airootfs/etc/pacman.d/mirrorlist
+          echo "## China" >> airootfs/etc/pacman.d/mirrorlist
+          echo "Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/\$repo/os/\$arch" >> airootfs/etc/pacman.d/mirrorlist
+          echo "Server = https://mirrors.ustc.edu.cn/archlinux/\$repo/os/\$arch" >> airootfs/etc/pacman.d/mirrorlist
+          
+          # 创建包列表 - 使用简单的 echo
+          echo "linux" > packages.x86_64
+          echo "linux-firmware" >> packages.x86_64
+          echo "linux-surface" >> packages.x86_64
+          echo "linux-surface-headers" >> packages.x86_64
+          echo "grub" >> packages.x86_64
+          echo "syslinux" >> packages.x86_64
+          echo "efibootmgr" >> packages.x86_64
+          echo "edk2-shell" >> packages.x86_64
+          echo "iptsd" >> packages.x86_64
+          echo "libinput" >> packages.x86_64
+          echo "linux-firmware-marvell" >> packages.x86_64
+          echo "networkmanager" >> packages.x86_64
+          echo "network-manager-applet" >> packages.x86_64
+          echo "iw" >> packages.x86_64
+          echo "wpa_supplicant" >> packages.x86_64
+          echo "dhcpcd" >> packages.x86_64
+          echo "iwd" >> packages.x86_64
+          echo "openssh" >> packages.x86_64
+          echo "curl" >> packages.x86_64
+          echo "wget" >> packages.x86_64
+          echo "git" >> packages.x86_64
+          echo "vim" >> packages.x86_64
+          echo "sway" >> packages.x86_64
+          echo "wayland" >> packages.x86_64
+          echo "seatd" >> packages.x86_64
+          echo "waybar" >> packages.x86_64
+          echo "wofi" >> packages.x86_64
+          echo "kitty" >> packages.x86_64
+          echo "thunar" >> packages.x86_64
+          echo "gvfs" >> packages.x86_64
+          echo "firefox" >> packages.x86_64
+          echo "firefox-i18n-zh-cn" >> packages.x86_64
+          echo "fcitx5" >> packages.x86_64
+          echo "fcitx5-im" >> packages.x86_64
+          echo "fcitx5-rime" >> packages.x86_64
+          echo "fcitx5-chinese-addons" >> packages.x86_64
+          echo "pipewire" >> packages.x86_64
+          echo "pipewire-pulse" >> packages.x86_64
+          echo "wireplumber" >> packages.x86_64
+          echo "pavucontrol" >> packages.x86_64
+          echo "alsa-utils" >> packages.x86_64
+          echo "powertop" >> packages.x86_64
+          echo "sudo" >> packages.x86_64
+          echo "brightnessctl" >> packages.x86_64
+          echo "xorg-xinput" >> packages.x86_64
+          echo "ttf-jetbrains-mono-nerd" >> packages.x86_64
+          echo "noto-fonts-cjk" >> packages.x86_64
+          echo "noto-fonts-emoji" >> packages.x86_64
+          echo "unzip" >> packages.x86_64
+          echo "unrar" >> packages.x86_64
+          echo "p7zip" >> packages.x86_64
+          echo "fuse2" >> packages.x86_64
+          echo "man-db" >> packages.x86_64
+          echo "man-pages" >> packages.x86_64
+          echo "texinfo" >> packages.x86_64
+
+          # 根据用户选择是否包含 Chrome 浏览器
+          if [ "${{ inputs.include_chrome }}" == "true" ]; then
+            echo "google-chrome" >> packages.x86_64
+          fi
+
+      - name: Build ISO with mkarchiso
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          echo "开始构建 ISO..."
+          echo "这需要 15-30 分钟,请耐心等待..."
+          echo ""
+
+          # 使用 archiso 官方工具构建
+          mkarchiso -v -w work -o out .
+
+          echo ""
+          echo "构建完成!"
+
+      - name: Generate checksums
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile/out"
+
+          # 生成 SHA256 校验和
+          sha256sum *.iso > SHA256SUMS
+
+          # 显示文件信息
+          ls -lh
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop1-arch-live-iso
+          path: "${{ github.workspace }}/surface-profile/out/*.iso"
+          retention-days: 90
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop1-arch-checksums
+          path: "${{ github.workspace }}/surface-profile/out/SHA256SUMS"
+          retention-days: 90
