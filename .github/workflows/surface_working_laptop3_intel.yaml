@@ -117,11 +117,10 @@ jobs:
           echo "Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/\$repo/os/\$arch" > airootfs/etc/pacman.d/mirrorlist
           echo "Server = https://mirrors.ustc.edu.cn/archlinux/\$repo/os/\$arch" >> airootfs/etc/pacman.d/mirrorlist
 
-          # packages.x86_64
-          echo "linux" > packages.x86_64
-          echo "linux-firmware" >> packages.x86_64
-          echo "linux-surface" >> packages.x86_64
+          # packages.x86_64 - 只用 linux-surface，不装标准 linux 内核
+          echo "linux-surface" > packages.x86_64
           echo "linux-surface-headers" >> packages.x86_64
+          echo "linux-firmware" >> packages.x86_64
           echo "surface-ipts-firmware" >> packages.x86_64
           echo "grub" >> packages.x86_64
           echo "syslinux" >> packages.x86_64
@@ -151,9 +150,11 @@ jobs:
           echo "firefox" >> packages.x86_64
           echo "firefox-i18n-zh-cn" >> packages.x86_64
           echo "fcitx5" >> packages.x86_64
-          echo "fcitx5-im" >> packages.x86_64
+          echo "fcitx5-gtk" >> packages.x86_64
+          echo "fcitx5-qt" >> packages.x86_64
           echo "fcitx5-rime" >> packages.x86_64
           echo "fcitx5-chinese-addons" >> packages.x86_64
+          echo "fcitx5-configtool" >> packages.x86_64
           echo "pipewire" >> packages.x86_64
           echo "pipewire-pulse" >> packages.x86_64
           echo "wireplumber" >> packages.x86_64
@@ -227,6 +228,15 @@ jobs:
           printf 'systemctl enable rtl8822ce.service\n' >> airootfs/root/first-boot.sh
           printf 'echo "配置完成！"\n' >> airootfs/root/first-boot.sh
           chmod +x airootfs/root/first-boot.sh
+
+      - name: Configure profiledef for linux-surface kernel
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+          # 替换 profiledef.sh 中的内核为 linux-surface
+          sed -i "s/'linux'/'linux-surface'/g" profiledef.sh
+          # 验证替换结果
+          echo "=== profiledef.sh 内核配置 ==="
+          grep -E "kernel|linux" profiledef.sh | head -10
 
       - name: Build ISO with mkarchiso
         run: |
