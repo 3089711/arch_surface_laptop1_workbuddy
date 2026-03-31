@@ -232,11 +232,40 @@ jobs:
       - name: Configure profiledef for linux-surface kernel
         run: |
           cd "$GITHUB_WORKSPACE/surface-profile"
-          # 替换 profiledef.sh 中的内核为 linux-surface
+
+          # 1. 替换 profiledef.sh 中的内核为 linux-surface
           sed -i "s/'linux'/'linux-surface'/g" profiledef.sh
-          # 验证替换结果
           echo "=== profiledef.sh 内核配置 ==="
           grep -E "kernel|linux" profiledef.sh | head -10
+
+          # 2. 修改 systemd-boot entries 模板，vmlinuz-linux → vmlinuz-linux-surface
+          #    archiso 把 boot entries 放在 efiboot/ 或 syslinux/ 目录下
+          echo "=== 查找 boot entries 模板 ==="
+          find . -name "*.conf" | grep -E "archiso|arch" | grep -v work | head -20
+
+          # 修改 efiboot 里的 entries（archiso releng 标准位置）
+          for f in efiboot/loader/entries/*.conf syslinux/*.cfg; do
+            if [ -f "$f" ]; then
+              echo "修改: $f"
+              sed -i "s|vmlinuz-linux |vmlinuz-linux-surface |g" "$f"
+              sed -i "s|vmlinuz-linux$|vmlinuz-linux-surface|g" "$f"
+              sed -i "s|initramfs-linux\.img|initramfs-linux-surface.img|g" "$f"
+              sed -i "s|initramfs-linux-fallback\.img|initramfs-linux-surface-fallback.img|g" "$f"
+              echo "--- 修改后内容 ---"
+              cat "$f"
+            fi
+          done
+
+          # 同时检查 grub 配置
+          if [ -f "grub/grub.cfg" ]; then
+            echo "修改 grub.cfg..."
+            sed -i "s|vmlinuz-linux |vmlinuz-linux-surface |g" grub/grub.cfg
+            sed -i "s|vmlinuz-linux$|vmlinuz-linux-surface|g" grub/grub.cfg
+            sed -i "s|initramfs-linux\.img|initramfs-linux-surface.img|g" grub/grub.cfg
+            sed -i "s|initramfs-linux-fallback\.img|initramfs-linux-surface-fallback.img|g" grub/grub.cfg
+          fi
+
+          echo "=== boot entries 修改完成 ==="
 
       - name: Build ISO with mkarchiso
         run: |
