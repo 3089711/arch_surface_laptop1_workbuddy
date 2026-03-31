@@ -1,0 +1,345 @@
+# Surface Laptop 3 Intel 版 Arch Linux - GitHub Actions 自动构建脚本
+# 针对 Laptop 3 优化：Realtek 无线网卡驱动 + 启动参数调整
+# 基于 linux-surface 项目: https://github.com/linux-surface/linux-surface
+
+name: Build Surface Laptop 3 Intel Arch Linux Live Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: '内核版本 (留空使用最新)'
+        required: false
+        type: string
+        default: ''
+      include_chrome:
+        description: '包含 Chrome 浏览器'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  # 解决 Node.js 20 弃用警告
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install archiso and dependencies
+        run: |
+          # 先初始化 pacman 密钥环
+          pacman-key --init
+          pacman-key --populate archlinux
+
+          # 更新系统 (跳过签名检查以避免密钥问题)
+          pacman -Syu --noconfirm --needed --disable-download-timeout
+
+          # 安装 archiso 和构建依赖
+          # libarchive-tools 已被 libarchive 替代
+          pacman -S --noconfirm --needed \
+            archiso \
+            git \
+            base-devel \
+            sudo \
+            dosfstools \
+            squashfs-tools \
+            libarchive \
+            syslinux \
+            grub \
+            edk2-shell
+
+      - name: Setup build environment
+        run: |
+          # 显示当前工作目录
+          echo "当前工作目录: $(pwd)"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "github.workspace: ${{ github.workspace }}"
+          ls -la
+
+          # 检查 archiso 模板是否存在
+          echo "检查 archiso 模板..."
+          ls -la /usr/share/archiso/configs/releng/
+
+          # 使用 GITHUB_WORKSPACE 环境变量而非 github.workspace
+          # 创建 surface-profile 目录
+          mkdir -p "$GITHUB_WORKSPACE/surface-profile"
+
+          # 使用 archiso 提供的模板
+          echo "复制 archiso 模板..."
+          # 正确复制方式：先清空目标目录，然后复制所有文件
+          rm -rf "$GITHUB_WORKSPACE/surface-profile"/*
+          cp -r /usr/share/archiso/configs/releng/* "$GITHUB_WORKSPACE/surface-profile/"
+
+          # 验证目录是否创建成功
+          echo "验证目录结构..."
+          ls -la "$GITHUB_WORKSPACE/surface-profile/"
+
+          # 检查 profiledef.sh 是否存在
+          if [ ! -f "$GITHUB_WORKSPACE/surface-profile/profiledef.sh" ]; then
+            echo "错误: profiledef.sh 不存在!"
+            exit 1
+          fi
+
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          # 创建必要的目录
+          mkdir -p airootfs/root
+          mkdir -p airootfs/etc/systemd/system/getty@tty1.service.d
+          mkdir -p airootfs/etc/skel/.config/sway
+          mkdir -p airootfs/etc/environment.d
+          mkdir -p airootfs/etc/pacman.d
+
+      - name: Import linux-surface GPG key
+        run: |
+          # 初始化 pacman 密钥环
+          pacman-key --init
+
+          # 导入 linux-surface GPG 密钥
+          pacman-key --populate archlinux
+          curl -s https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc | \
+            pacman-key --add -
+          pacman-key --lsign-key 56C464BAAC421453
+
+      - name: Prepare configuration files
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          # 创建 pacman.conf 文件 - 使用 echo 逐行写入
+          echo "[options]" > pacman.conf
+          echo "HoldPkg = pacman glibc" >> pacman.conf
+          echo "Architecture = auto" >> pacman.conf
+          echo "Color" >> pacman.conf
+          echo "CheckSpace" >> pacman.conf
+          echo "ParallelDownloads = 5" >> pacman.conf
+          echo "SigLevel = Required DatabaseOptional" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[core]" >> pacman.conf
+          echo "Include = /etc/pacman.d/mirrorlist" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[extra]" >> pacman.conf
+          echo "Include = /etc/pacman.d/mirrorlist" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[multilib]" >> pacman.conf
+          echo "Include = /etc/pacman.d/mirrorlist" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[linux-surface]" >> pacman.conf
+          echo "Server = https://pkg.surfacelinux.com/arch/" >> pacman.conf
+          echo "SigLevel = Required" >> pacman.conf
+          
+          # 添加 AUR 辅助仓库（用于 Realtek 驱动）
+          echo "" >> pacman.conf
+          echo "[archlinuxcn]" >> pacman.conf
+          echo "Server = https://mirrors.tuna.tsinghua.edu.cn/archlinuxcn/\$arch" >> pacman.conf
+          echo "SigLevel = Optional TrustAll" >> pacman.conf
+          
+          # 复制到 airootfs
+          cp pacman.conf airootfs/etc/pacman.conf
+          
+          # 创建 mirrorlist 文件
+          mkdir -p airootfs/etc/pacman.d
+          echo "##" > airootfs/etc/pacman.d/mirrorlist
+          echo "## Arch Linux repository mirrorlist" >> airootfs/etc/pacman.d/mirrorlist
+          echo "## Generated on $(date)" >> airootfs/etc/pacman.d/mirrorlist
+          echo "##" >> airootfs/etc/pacman.d/mirrorlist
+          echo "" >> airootfs/etc/pacman.d/mirrorlist
+          echo "## China" >> airootfs/etc/pacman.d/mirrorlist
+          echo "Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/\$repo/os/\$arch" >> airootfs/etc/pacman.d/mirrorlist
+          echo "Server = https://mirrors.ustc.edu.cn/archlinux/\$repo/os/\$arch" >> airootfs/etc/pacman.d/mirrorlist
+          
+          # 创建包列表 - Laptop 3 专用
+          echo "linux" > packages.x86_64
+          echo "linux-firmware" >> packages.x86_64
+          echo "linux-surface" >> packages.x86_64
+          echo "linux-surface-headers" >> packages.x86_64
+          echo "surface-firmware" >> packages.x86_64
+          echo "surface-control" >> packages.x86_64
+          echo "grub" >> packages.x86_64
+          echo "syslinux" >> packages.x86_64
+          echo "efibootmgr" >> packages.x86_64
+          echo "edk2-shell" >> packages.x86_64
+          echo "iptsd" >> packages.x86_64
+          echo "libinput" >> packages.x86_64
+          echo "networkmanager" >> packages.x86_64
+          echo "network-manager-applet" >> packages.x86_64
+          echo "iw" >> packages.x86_64
+          echo "wpa_supplicant" >> packages.x86_64
+          echo "dhcpcd" >> packages.x86_64
+          echo "iwd" >> packages.x86_64
+          echo "openssh" >> packages.x86_64
+          echo "curl" >> packages.x86_64
+          echo "wget" >> packages.x86_64
+          echo "git" >> packages.x86_64
+          echo "vim" >> packages.x86_64
+          echo "sway" >> packages.x86_64
+          echo "wayland" >> packages.x86_64
+          echo "seatd" >> packages.x86_64
+          echo "waybar" >> packages.x86_64
+          echo "wofi" >> packages.x86_64
+          echo "kitty" >> packages.x86_64
+          echo "thunar" >> packages.x86_64
+          echo "gvfs" >> packages.x86_64
+          echo "firefox" >> packages.x86_64
+          echo "firefox-i18n-zh-cn" >> packages.x86_64
+          echo "fcitx5" >> packages.x86_64
+          echo "fcitx5-im" >> packages.x86_64
+          echo "fcitx5-rime" >> packages.x86_64
+          echo "fcitx5-chinese-addons" >> packages.x86_64
+          echo "pipewire" >> packages.x86_64
+          echo "pipewire-pulse" >> packages.x86_64
+          echo "wireplumber" >> packages.x86_64
+          echo "pavucontrol" >> packages.x86_64
+          echo "alsa-utils" >> packages.x86_64
+          echo "powertop" >> packages.x86_64
+          echo "sudo" >> packages.x86_64
+          echo "brightnessctl" >> packages.x86_64
+          echo "xorg-xinput" >> packages.x86_64
+          echo "ttf-jetbrains-mono-nerd" >> packages.x86_64
+          echo "noto-fonts-cjk" >> packages.x86_64
+          echo "noto-fonts-emoji" >> packages.x86_64
+          echo "unzip" >> packages.x86_64
+          echo "unrar" >> packages.x86_64
+          echo "p7zip" >> packages.x86_64
+          echo "fuse2" >> packages.x86_64
+          echo "man-db" >> packages.x86_64
+          echo "man-pages" >> packages.x86_64
+          echo "texinfo" >> packages.x86_64
+          echo "yay" >> packages.x86_64  # AUR 助手，用于安装 Realtek 驱动
+          echo "rtl8822ce-dkms-git" >> packages.x86_64  # Laptop 3 专用 Realtek 无线网卡驱动
+
+          # 根据用户选择是否包含 Chrome 浏览器
+          if [ "${{ inputs.include_chrome }}" == "true" ]; then
+            echo "google-chrome" >> packages.x86_64
+          fi
+
+          # 创建 GRUB 配置文件 - Laptop 3 优化启动参数
+          mkdir -p airootfs/etc/default
+          echo "# Surface Laptop 3 专用启动参数" > airootfs/etc/default/grub
+          echo 'GRUB_DEFAULT=0' >> airootfs/etc/default/grub
+          echo 'GRUB_TIMEOUT=5' >> airootfs/etc/default/grub
+          echo 'GRUB_DISTRIBUTOR="Arch Linux"' >> airootfs/etc/default/grub
+          echo 'GRUB_CMDLINE_LINUX_DEFAULT="loglevel=3 quiet splash mem_sleep_default=s2idle pcie_aspm=off i915.enable_fbc=1 i915.enable_psr=1"' >> airootfs/etc/default/grub
+          echo 'GRUB_CMDLINE_LINUX=""' >> airootfs/etc/default/grub
+          echo 'GRUB_PRELOAD_MODULES="part_gpt part_msdos"' >> airootfs/etc/default/grub
+          echo 'GRUB_ENABLE_CRYPTODISK=y' >> airootfs/etc/default/grub
+          echo 'GRUB_TERMINAL_INPUT=console' >> airootfs/etc/default/grub
+          echo 'GRUB_TERMINAL_OUTPUT=console' >> airootfs/etc/default/grub
+          echo 'GRUB_DISABLE_RECOVERY="true"' >> airootfs/etc/default/grub
+          echo 'GRUB_DISABLE_SUBMENU=y' >> airootfs/etc/default/grub
+
+          # 创建 udev 规则，确保 Realtek 驱动正确加载
+          mkdir -p airootfs/etc/udev/rules.d
+          echo '# 确保 Realtek RTL8822CE 驱动正确加载' > airootfs/etc/udev/rules.d/50-rtl8822ce.rules
+          echo 'ACTION=="add", SUBSYSTEM=="net", ATTR{address}=="*:84:*:*:*:*", RUN+="/usr/bin/systemctl enable rtl8822ce" >> airootfs/etc/udev/rules.d/50-rtl8822ce.rules
+
+          # 创建 systemd 服务文件，自动加载 Realtek 驱动
+          mkdir -p airootfs/etc/systemd/system
+          echo '[Unit]' > airootfs/etc/systemd/system/rtl8822ce.service
+          echo 'Description=Load Realtek RTL8822CE WiFi Driver' >> airootfs/etc/systemd/system/rtl8822ce.service
+          echo 'After=network.target' >> airootfs/etc/systemd/system/rtl8822ce.service
+          echo '' >> airootfs/etc/systemd/system/rtl8822ce.service
+          echo '[Service]' >> airootfs/etc/systemd/system/rtl8822ce.service
+          echo 'Type=oneshot' >> airootfs/etc/systemd/system/rtl8822ce.service
+          echo 'ExecStart=/usr/bin/modprobe rtl8822ce' >> airootfs/etc/systemd/system/rtl8822ce.service
+          echo 'RemainAfterExit=yes' >> airootfs/etc/systemd/system/rtl8822ce.service
+          echo '' >> airootfs/etc/systemd/system/rtl8822ce.service
+          echo '[Install]' >> airootfs/etc/systemd/system/rtl8822ce.service
+          echo 'WantedBy=multi-user.target' >> airootfs/etc/systemd/system/rtl8822ce.service
+
+          # 创建实时网络连接脚本（USB 手机热点备用方案）
+          mkdir -p airootfs/root
+          echo '#!/bin/bash' > airootfs/root/setup-wifi.sh
+          echo '# Surface Laptop 3 WiFi 设置脚本' >> airootfs/root/setup-wifi.sh
+          echo '# 如果 Realtek 驱动有问题，可以使用 USB 手机热点' >> airootfs/root/setup-wifi.sh
+          echo '' >> airootfs/root/setup-wifi.sh
+          echo 'echo "=== Surface Laptop 3 WiFi 设置 ==="' >> airootfs/root/setup-wifi.sh
+          echo '' >> airootfs/root/setup-wifi.sh
+          echo '# 检查 Realtek 驱动是否加载' >> airootfs/root/setup-wifi.sh
+          echo 'if lsmod | grep -q "rtl8822ce"; then' >> airootfs/root/setup-wifi.sh
+          echo '  echo "✓ Realtek RTL8822CE 驱动已加载"' >> airootfs/root/setup-wifi.sh
+          echo 'else' >> airootfs/root/setup-wifi.sh
+          echo '  echo "⚠ Realtek 驱动未加载，尝试重新加载..."' >> airootfs/root/setup-wifi.sh
+          echo '  modprobe rtl8822ce' >> airootfs/root/setup-wifi.sh
+          echo 'fi' >> airootfs/root/setup-wifi.sh
+          echo '' >> airootfs/root/setup-wifi.sh
+          echo '# 启动 NetworkManager' >> airootfs/root/setup-wifi.sh
+          echo 'systemctl start NetworkManager' >> airootfs/root/setup-wifi.sh
+          echo 'systemctl enable NetworkManager' >> airootfs/root/setup-wifi.sh
+          echo '' >> airootfs/root/setup-wifi.sh
+          echo 'echo ""' >> airootfs/root/setup-wifi.sh
+          echo 'echo "备用方案：使用 USB 手机热点"' >> airootfs/root/setup-wifi.sh
+          echo 'echo "1. 用 USB 线连接手机"' >> airootfs/root/setup-wifi.sh
+          echo 'echo "2. 在手机上开启 \"USB 网络共享\""' >> airootfs/root/setup-wifi.sh
+          echo 'echo "3. 系统会自动识别为有线网络"' >> airootfs/root/setup-wifi.sh
+          echo 'chmod +x airootfs/root/setup-wifi.sh' >> airootfs/root/setup-wifi.sh
+
+          # 创建用户首次启动配置脚本
+          echo '#!/bin/bash' > airootfs/root/first-boot.sh
+          echo '# Surface Laptop 3 首次启动配置脚本' >> airootfs/root/first-boot.sh
+          echo '' >> airootfs/root/first-boot.sh
+          echo 'echo "=== Surface Laptop 3 首次配置 ==="' >> airootfs/root/first-boot.sh
+          echo '' >> airootfs/root/first-boot.sh
+          echo '# 设置 root 密码' >> airootfs/root/first-boot.sh
+          echo 'echo "请设置 root 密码:"' >> airootfs/root/first-boot.sh
+          echo 'passwd' >> airootfs/root/first-boot.sh
+          echo '' >> airootfs/root/first-boot.sh
+          echo '# 启用必要的服务' >> airootfs/root/first-boot.sh
+          echo 'systemctl enable sshd' >> airootfs/root/first-boot.sh
+          echo 'systemctl enable rtl8822ce.service' >> airootfs/root/first-boot.sh
+          echo 'systemctl enable powertop' >> airootfs/root/first-boot.sh
+          echo '' >> airootfs/root/first-boot.sh
+          echo '# 更新 grub 配置（应用 Laptop 3 优化参数）' >> airootfs/root/first-boot.sh
+          echo 'grub-mkconfig -o /boot/grub/grub.cfg' >> airootfs/root/first-boot.sh
+          echo '' >> airootfs/root/first-boot.sh
+          echo 'echo "✅ 首次配置完成！"' >> airootfs/root/first-boot.sh
+          echo 'echo "建议重启后运行：./root/setup-wifi.sh"' >> airootfs/root/first-boot.sh
+          chmod +x airootfs/root/first-boot.sh
+
+      - name: Build ISO with mkarchiso
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          echo "开始构建 Surface Laptop 3 Intel 版 ISO..."
+          echo "这需要 15-30 分钟,请耐心等待..."
+          echo ""
+
+          # 使用 archiso 官方工具构建
+          mkarchiso -v -w work -o out .
+
+          echo ""
+          echo "构建完成!"
+
+      - name: Generate checksums
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile/out"
+
+          # 生成 SHA256 校验和
+          sha256sum *.iso > SHA256SUMS
+
+          # 显示文件信息
+          ls -lh
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-live-iso
+          path: "${{ github.workspace }}/surface-profile/out/*.iso"
+          retention-days: 90
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-checksums
+          path: "${{ github.workspace }}/surface-profile/out/SHA256SUMS"
+          retention-days: 90
