@@ -55,37 +55,14 @@ jobs:
           echo "检查 archiso 模板..."
           ls -la /usr/share/archiso/configs/releng/
 
-          # ★ 在复制前先修改 archiso 源模板里的 entries，确保复制过来就是改好的
-          echo "=== 修改 archiso 源模板 entries ==="
-          RELENG="/usr/share/archiso/configs/releng"
-          for f in "$RELENG"/efiboot/loader/entries/*.conf "$RELENG"/syslinux/*.cfg; do
-            if [ -f "$f" ]; then
-              echo "修改源模板: $f"
-              sed -i "s|vmlinuz-linux |vmlinuz-linux-surface |g" "$f"
-              sed -i "s|vmlinuz-linux$|vmlinuz-linux-surface|g" "$f"
-              sed -i "s|initramfs-linux\.img|initramfs-linux-surface.img|g" "$f"
-              sed -i "s|initramfs-linux-fallback\.img|initramfs-linux-surface-fallback.img|g" "$f"
-              echo "--- 修改后 ---"
-              cat "$f"
-            fi
-          done
-          # 同时改 grub 模板（如果存在）
-          if [ -f "$RELENG/grub/grub.cfg" ]; then
-            sed -i "s|vmlinuz-linux |vmlinuz-linux-surface |g" "$RELENG/grub/grub.cfg"
-            sed -i "s|vmlinuz-linux$|vmlinuz-linux-surface|g" "$RELENG/grub/grub.cfg"
-            sed -i "s|initramfs-linux\.img|initramfs-linux-surface.img|g" "$RELENG/grub/grub.cfg"
-            sed -i "s|initramfs-linux-fallback\.img|initramfs-linux-surface-fallback.img|g" "$RELENG/grub/grub.cfg"
-          fi
-
           mkdir -p "$GITHUB_WORKSPACE/surface-profile"
           rm -rf "$GITHUB_WORKSPACE/surface-profile"/*
           cp -r /usr/share/archiso/configs/releng/* "$GITHUB_WORKSPACE/surface-profile/"
 
           echo "验证目录结构..."
           ls -la "$GITHUB_WORKSPACE/surface-profile/"
-          echo "=== 验证 entries 已经是 linux-surface ==="
-          grep -r "vmlinuz" "$GITHUB_WORKSPACE/surface-profile/efiboot/" 2>/dev/null || echo "efiboot 目录不存在"
-          grep -r "vmlinuz" "$GITHUB_WORKSPACE/surface-profile/syslinux/" 2>/dev/null || echo "syslinux 目录不存在"
+          echo "=== 原始 efiboot entries ==="
+          ls "$GITHUB_WORKSPACE/surface-profile/efiboot/loader/entries/" 2>/dev/null || echo "无 efiboot 目录"
 
           if [ ! -f "$GITHUB_WORKSPACE/surface-profile/profiledef.sh" ]; then
             echo "错误: profiledef.sh 不存在!"
@@ -254,19 +231,54 @@ jobs:
           printf 'echo "配置完成！"\n' >> airootfs/root/first-boot.sh
           chmod +x airootfs/root/first-boot.sh
 
-      - name: Configure profiledef for linux-surface kernel
+      - name: Configure profiledef and boot entries for linux-surface kernel
         run: |
           cd "$GITHUB_WORKSPACE/surface-profile"
 
-          # 替换 profiledef.sh 中的内核为 linux-surface
+          # 1. 替换 profiledef.sh 中的内核为 linux-surface
           sed -i "s/'linux'/'linux-surface'/g" profiledef.sh
           echo "=== profiledef.sh 内核配置 ==="
           grep -E "kernel|linux" profiledef.sh | head -10
 
-          # 再次确认 entries 里的内核路径（应该在 Setup 步骤就改好了）
-          echo "=== 再次确认 boot entries ==="
-          grep -r "vmlinuz" efiboot/ 2>/dev/null || echo "efiboot 目录不存在，由 mkarchiso 生成"
-          grep -r "vmlinuz" syslinux/ 2>/dev/null || echo "syslinux 目录不存在"
+          # 2. 创建 mkinitcpio preset（关键！告诉 archiso 为 linux-surface 生成 initramfs）
+          mkdir -p airootfs/etc/mkinitcpio.d
+          printf "PRESETS=('archiso')\n" > airootfs/etc/mkinitcpio.d/linux-surface.preset
+          printf "\n" >> airootfs/etc/mkinitcpio.d/linux-surface.preset
+          printf "ALL_kver='/boot/vmlinuz-linux-surface'\n" >> airootfs/etc/mkinitcpio.d/linux-surface.preset
+          printf "archiso_config='/etc/mkinitcpio.conf.d/archiso.conf'\n" >> airootfs/etc/mkinitcpio.d/linux-surface.preset
+          printf "\n" >> airootfs/etc/mkinitcpio.d/linux-surface.preset
+          printf 'archiso_image="/boot/initramfs-linux-surface.img"\n' >> airootfs/etc/mkinitcpio.d/linux-surface.preset
+          echo "=== mkinitcpio preset 内容 ==="
+          cat airootfs/etc/mkinitcpio.d/linux-surface.preset
+
+          # 3. 手动覆盖 efiboot/loader/entries（systemd-boot 用这里的文件）
+          mkdir -p efiboot/loader/entries
+          # 主启动项（用 printf 逐行写入，避免 YAML heredoc 冲突）
+          printf "title   Arch Linux Surface (x86_64, UEFI)\n" > efiboot/loader/entries/01-archiso-linux-surface.conf
+          printf "sort-key 01\n" >> efiboot/loader/entries/01-archiso-linux-surface.conf
+          printf "linux   /arch/boot/x86_64/vmlinuz-linux-surface\n" >> efiboot/loader/entries/01-archiso-linux-surface.conf
+          printf "initrd  /arch/boot/x86_64/initramfs-linux-surface.img\n" >> efiboot/loader/entries/01-archiso-linux-surface.conf
+          printf "options archisobasedir=arch archisosearchuuid=%%ARCHISO_UUID%% pcie_aspm=off i915.enable_fbc=1 i915.enable_psr=1\n" >> efiboot/loader/entries/01-archiso-linux-surface.conf
+
+          # 4. 删除原来指向 vmlinuz-linux 的默认 entries（防止冲突）
+          rm -f efiboot/loader/entries/01-archiso-x86_64-linux.conf
+          rm -f efiboot/loader/entries/02-archiso-x86_64-speech-linux.conf
+          rm -f efiboot/loader/entries/03-archiso-x86_64-memtest86+.conf
+
+          echo "=== efiboot/loader/entries 内容 ==="
+          ls -la efiboot/loader/entries/
+          cat efiboot/loader/entries/01-archiso-linux-surface.conf
+
+          # 5. 修改 syslinux 配置（BIOS 启动用）
+          if ls syslinux/*.cfg 2>/dev/null; then
+            for f in syslinux/*.cfg; do
+              sed -i "s|vmlinuz-linux |vmlinuz-linux-surface |g" "$f"
+              sed -i "s|vmlinuz-linux$|vmlinuz-linux-surface|g" "$f"
+              sed -i "s|initramfs-linux\.img|initramfs-linux-surface.img|g" "$f"
+              sed -i "s|initramfs-linux-fallback\.img|initramfs-linux-surface-fallback.img|g" "$f"
+              echo "修改 syslinux: $f"
+            done
+          fi
 
       - name: Build ISO with mkarchiso
         run: |
