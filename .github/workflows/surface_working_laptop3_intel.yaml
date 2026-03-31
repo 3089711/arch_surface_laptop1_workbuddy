@@ -122,8 +122,7 @@ jobs:
           echo "linux-firmware" >> packages.x86_64
           echo "linux-surface" >> packages.x86_64
           echo "linux-surface-headers" >> packages.x86_64
-          echo "surface-firmware" >> packages.x86_64
-          echo "surface-control" >> packages.x86_64
+          echo "surface-ipts-firmware" >> packages.x86_64
           echo "grub" >> packages.x86_64
           echo "syslinux" >> packages.x86_64
           echo "efibootmgr" >> packages.x86_64
