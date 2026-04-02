@@ -298,36 +298,36 @@ jobs:
 
           # --- 1. 写入标准 mkinitcpio.conf ---
           cat > airootfs/etc/mkinitcpio.conf << MKINITCPIO_EOF
-# mkinitcpio.conf - Surface Laptop 3 Intel 专用配置
-# 确保 Live USB 上内置键盘/触控板在 initramfs 阶段即可用
-#
-# Surface Laptop 3 键盘依赖链:
-#   intel_lpss_pci → surface_aggregator → surface_aggregator_platform
-#     → surface_hid_core → surface_kbd (内核自动匹配)
-#
-# 这些模块在 linux-surface 内核中全部为 =m (可加载模块)，
-# 不写入 MODULES 则 initramfs 中不包含它们，导致早期键盘不可用。
+          # mkinitcpio.conf - Surface Laptop 3 Intel 专用配置
+          # 确保 Live USB 上内置键盘/触控板在 initramfs 阶段即可用
+          #
+          # Surface Laptop 3 键盘依赖链:
+          #   intel_lpss_pci → surface_aggregator → surface_aggregator_platform
+          #     → surface_hid_core → surface_kbd (内核自动匹配)
+          #
+          # 这些模块在 linux-surface 内核中全部为 =m (可加载模块)，
+          # 不写入 MODULES 则 initramfs 中不包含它们，导致早期键盘不可用。
 
-MODULES=($SURFACE_MODULES)
+          MODULES=($SURFACE_MODULES)
 
-FILES=(/usr/lib/firmware/intel-ucode/intel-ucode.img)
+          FILES=(/usr/lib/firmware/intel-ucode/intel-ucode.img)
 
-HOOKS=($SURFACE_HOOKS)
-MKINITCPIO_EOF
+          HOOKS=($SURFACE_HOOKS)
+          MKINITCPIO_EOF
 
           # --- 2. 写入 mkinitcpio-archiso.conf（archiso Live ISO 构建专用）---
           # mkinitcpio-archiso 包有自己的配置文件，mkarchiso 构建时优先使用此文件
           cat > airootfs/etc/mkinitcpio-archiso.conf << MKINITCPIO_ARCHISO_EOF
-# mkinitcpio-archiso.conf - Surface Laptop 3 Intel
-# 此文件由 mkinitcpio-archiso 包在构建 Live ISO initramfs 时使用
-# 必须包含 Surface 键盘驱动模块，否则 U盘启动后键盘不可用
+          # mkinitcpio-archiso.conf - Surface Laptop 3 Intel
+          # 此文件由 mkinitcpio-archiso 包在构建 Live ISO initramfs 时使用
+          # 必须包含 Surface 键盘驱动模块，否则 U盘启动后键盘不可用
 
-MODULES=($SURFACE_MODULES)
+          MODULES=($SURFACE_MODULES)
 
-FILES=(/usr/lib/firmware/intel-ucode/intel-ucode.img)
+          FILES=(/usr/lib/firmware/intel-ucode/intel-ucode.img)
 
-HOOKS=($SURFACE_HOOKS)
-MKINITCPIO_ARCHISO_EOF
+          HOOKS=($SURFACE_HOOKS)
+          MKINITCPIO_ARCHISO_EOF
 
           # --- 3. 创建 mkinitcpio.conf.d/ drop-in 配置（最高优先级）---
           # mkinitcpio 支持 /etc/mkinitcpio.conf.d/*.conf drop-in 覆盖
@@ -335,45 +335,45 @@ MKINITCPIO_ARCHISO_EOF
           mkdir -p airootfs/etc/mkinitcpio.conf.d
 
           cat > airootfs/etc/mkinitcpio.conf.d/surface-laptop3-keyboard.conf << DROPIN_EOF
-# Surface Laptop 3 Intel - 键盘模块强制预加载
-# 此 drop-in 覆盖任何默认配置，确保以下模块被打包进 initramfs
-#
-# 模块加载顺序很重要:
-#   1. intel_lpss_pci    - Intel LPSS PCI 总线（Surface Aggregator 依赖它）
-#   2. surface_aggregator - SSAM 核心通信层（嵌入式控制器 EC 驱动）
-#   3. surface_aggregator_platform - SSAM 平台驱动（设备注册）
-#   4. surface_hid_core   - HID 传输协议层（键盘/触控板通过此层通信）
-#   5. i915               - Intel GPU 驱动（显示输出需要）
-#   6. hid_multitouch     - 多点触控 HID 支持
-#   7. usbhid             - USB HID 兼容（外接键盘/鼠标兜底）
+          # Surface Laptop 3 Intel - 键盘模块强制预加载
+          # 此 drop-in 覆盖任何默认配置，确保以下模块被打包进 initramfs
+          #
+          # 模块加载顺序很重要:
+          #   1. intel_lpss_pci    - Intel LPSS PCI 总线（Surface Aggregator 依赖它）
+          #   2. surface_aggregator - SSAM 核心通信层（嵌入式控制器 EC 驱动）
+          #   3. surface_aggregator_platform - SSAM 平台驱动（设备注册）
+          #   4. surface_hid_core   - HID 传输协议层（键盘/触控板通过此层通信）
+          #   5. i915               - Intel GPU 驱动（显示输出需要）
+          #   6. hid_multitouch     - 多点触控 HID 支持
+          #   7. usbhid             - USB HID 兼容（外接键盘/鼠标兜底）
 
-MODULES+=(i915 intel_lpss_pci surface_aggregator surface_aggregator_platform surface_hid_core hid_multitouch usbhid)
-DROPIN_EOF
+          MODULES+=(i915 intel_lpss_pci surface_aggregator surface_aggregator_platform surface_hid_core hid_multitouch usbhid)
+          DROPIN_EOF
 
           # --- 4. 创建 modprobe 配置确保模块加载顺序 ---
           # modprobe 依赖文件控制模块加载顺序，防止依赖竞争
           mkdir -p airootfs/etc/modprobe.d
           cat > airootfs/etc/modprobe.d/surface-laptop3.conf << 'MODPROBE_EOF'
-# Surface Laptop 3 Intel - 内核模块配置
-# softdep 确保加载顺序正确：LPSS → Aggregator → HID → Keyboard
+          # Surface Laptop 3 Intel - 内核模块配置
+          # softdep 确保加载顺序正确：LPSS → Aggregator → HID → Keyboard
 
-softdep surface_aggregator pre: intel_lpss_pci
-softdep surface_hid_core pre: surface_aggregator
-softdep surface_kbd pre: surface_hid_core
-MODPROBE_EOF
+          softdep surface_aggregator pre: intel_lpss_pci
+          softdep surface_hid_core pre: surface_aggregator
+          softdep surface_kbd pre: surface_hid_core
+          MODPROBE_EOF
 
           # --- 5. 创建 systemd 模块自动加载（运行时兜底）---
           # 即使 initramfs 加载失败，systemd 也会在运行时尝试加载
           mkdir -p airootfs/etc/modules-load.d
           cat > airootfs/etc/modules-load.d/surface-laptop3-keyboard.conf << 'MODULESLOAD_EOF'
-# Surface Laptop 3 Intel - 运行时自动加载模块
-# 此文件确保 Live 环境启动后如果 initramfs 未加载模块，仍会自动加载
+          # Surface Laptop 3 Intel - 运行时自动加载模块
+          # 此文件确保 Live 环境启动后如果 initramfs 未加载模块，仍会自动加载
 
-intel_lpss_pci
-surface_aggregator
-surface_aggregator_platform
-surface_hid_core
-MODULESLOAD_EOF
+          intel_lpss_pci
+          surface_aggregator
+          surface_aggregator_platform
+          surface_hid_core
+          MODULESLOAD_EOF
 
           echo "=========================================="
           echo " mkinitcpio 键盘支持配置已完成（五重保障）"
@@ -405,27 +405,27 @@ MODULESLOAD_EOF
 
           # 创建 systemd-boot loader.conf
           cat > airootfs/boot/loader/loader.conf << 'LOADER_EOF'
-default arch-surface.conf
-timeout 5
-editor no
-LOADER_EOF
+          default arch-surface.conf
+          timeout 5
+          editor no
+          LOADER_EOF
 
           # 创建 archiso 兼容的启动条目
           # 注意：Live ISO 环境的 root 挂载方式与安装后不同
           # 使用 archiso 特定的 cow_spaces 和 archisobasedir 参数
           cat > airootfs/boot/loader/entries/arch-surface.conf << 'ENTRY_EOF'
-title   Arch Linux (linux-surface) - Surface Laptop 3 Intel
-linux   /vmlinuz-linux-surface
-initrd  /intel-ucode.img
-initrd  /initramfs-linux-surface.img
-options archisobasedir=arch archisobasedir=arch copytoram=y
+          title   Arch Linux (linux-surface) - Surface Laptop 3 Intel
+          linux   /vmlinuz-linux-surface
+          initrd  /intel-ucode.img
+          initrd  /initramfs-linux-surface.img
+          options archisobasedir=arch archisobasedir=arch copytoram=y
 
-# Surface Laptop 3 Intel 已知问题修复参数（根据需要取消注释）:
-# reboot=pci              - 修复重启卡在Surface Logo（内核<5.10时需要）
-# mem_sleep_default=s2idle - 浅睡眠模式（休眠问题时使用）
-# i915.enable_psr=0       - 禁用面板自刷新（屏幕闪烁时使用）
-# ibt=off                 - 禁用间接分支跟踪（启动失败时使用）
-ENTRY_EOF
+          # Surface Laptop 3 Intel 已知问题修复参数（根据需要取消注释）:
+          # reboot=pci              - 修复重启卡在Surface Logo（内核<5.10时需要）
+          # mem_sleep_default=s2idle - 浅睡眠模式（休眠问题时使用）
+          # i915.enable_psr=0       - 禁用面板自刷新（屏幕闪烁时使用）
+          # ibt=off                 - 禁用间接分支跟踪（启动失败时使用）
+          ENTRY_EOF
 
           echo "systemd-boot 引导配置已完成"
           echo "包含了 Surface Laptop 3 Intel 特定的内核参数（已注释，按需启用）"
@@ -442,75 +442,75 @@ ENTRY_EOF
           mkdir -p airootfs/usr/local/bin
 
           cat > airootfs/usr/local/bin/surface-live-setup.sh << 'SETUP_EOF'
-#!/bin/bash
-# Surface Laptop 3 Live 环境自动配置脚本
+          #!/bin/bash
+          # Surface Laptop 3 Live 环境自动配置脚本
 
-set -e
+          set -e
 
-echo "=========================================="
-echo " Surface Laptop 3 Live 环境初始化"
-echo "=========================================="
+          echo "=========================================="
+          echo " Surface Laptop 3 Live 环境初始化"
+          echo "=========================================="
 
-# 1. 启用 GPM（TTY 下鼠标支持，应急兜底）
-echo "[1/6] 启用 GPM 鼠标支持..."
-systemctl enable gpm
+          # 1. 启用 GPM（TTY 下鼠标支持，应急兜底）
+          echo "[1/6] 启用 GPM 鼠标支持..."
+          systemctl enable gpm
 
-# 2. 启用 NetworkManager（必需）
-echo "[2/6] 启用 NetworkManager..."
-systemctl enable NetworkManager
+          # 2. 启用 NetworkManager（必需）
+          echo "[2/6] 启用 NetworkManager..."
+          systemctl enable NetworkManager
 
-# 3. 启用蓝牙（推荐）
-echo "[3/6] 启用蓝牙..."
-systemctl enable bluetooth
+          # 3. 启用蓝牙（推荐）
+          echo "[3/6] 启用蓝牙..."
+          systemctl enable bluetooth
 
-# 4. 启用 SSH（远程操控兜底：用另一台电脑 ssh root@Surface_IP）
-echo "[4/6] 启用 SSH..."
-systemctl enable sshd
+          # 4. 启用 SSH（远程操控兜底：用另一台电脑 ssh root@Surface_IP）
+          echo "[4/6] 启用 SSH..."
+          systemctl enable sshd
 
-# 5. 启用 IPTS 触摸屏服务（Intel 版本必需）
-echo "[5/6] 启用 iptsd 触摸屏服务..."
-systemctl enable iptsd
+          # 5. 启用 IPTS 触摸屏服务（Intel 版本必需）
+          echo "[5/6] 启用 iptsd 触摸屏服务..."
+          systemctl enable iptsd
 
-# 6. 启用 PipeWire 音频服务（推荐）
-echo "[6/6] 启用 PipeWire 音频服务..."
-systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service 2>/dev/null || true
+          # 6. 启用 PipeWire 音频服务（推荐）
+          echo "[6/6] 启用 PipeWire 音频服务..."
+          systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service 2>/dev/null || true
 
-# 5. 创建 Fn 键配置（Surface 特有）
-echo "[5/5] 配置 Fn 键行为..."
-mkdir -p /etc/modprobe.d
-cat > /etc/modprobe.d/hid_apple.conf << 'FNCONF'
-# Surface Laptop 3 Fn 键配置
-# fnmode=2: 功能键模式（F1-F12默认为功能键，按Fn切换媒体键）
-# swap_fn_leftctrl=1: 交换Fn和左Ctrl（可选，按需取消注释）
-options hid_apple fnmode=2
-# options hid_apple swap_fn_leftctrl=1
-FNCONF
+          # 5. 创建 Fn 键配置（Surface 特有）
+          echo "[5/5] 配置 Fn 键行为..."
+          mkdir -p /etc/modprobe.d
+          cat > /etc/modprobe.d/hid_apple.conf << 'FNCONF'
+          # Surface Laptop 3 Fn 键配置
+          # fnmode=2: 功能键模式（F1-F12默认为功能键，按Fn切换媒体键）
+          # swap_fn_leftctrl=1: 交换Fn和左Ctrl（可选，按需取消注释）
+          options hid_apple fnmode=2
+          # options hid_apple swap_fn_leftctrl=1
+          FNCONF
 
-echo ""
-echo "=========================================="
-echo " 配置完成！"
-echo " 内置键盘、触控板、WiFi、蓝牙已就绪"
-echo "=========================================="
-SETUP_EOF
+          echo ""
+          echo "=========================================="
+          echo " 配置完成！"
+          echo " 内置键盘、触控板、WiFi、蓝牙已就绪"
+          echo "=========================================="
+          SETUP_EOF
 
           chmod +x airootfs/usr/local/bin/surface-live-setup.sh
 
           # 创建 systemd 服务，在 Live 环境首次启动时运行
           mkdir -p airootfs/etc/systemd/system
           cat > airootfs/etc/systemd/system/surface-live-setup.service << 'SERVICE_EOF'
-[Unit]
-Description=Surface Laptop 3 Live Environment Setup
-After=multi-user.target
-Wants=multi-user.target
+          [Unit]
+          Description=Surface Laptop 3 Live Environment Setup
+          After=multi-user.target
+          Wants=multi-user.target
 
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/surface-live-setup.sh
-RemainAfterExit=yes
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/surface-live-setup.sh
+          RemainAfterExit=yes
 
-[Install]
-WantedBy=multi-user.target
-SERVICE_EOF
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE_EOF
 
           echo "Surface Live 环境服务已配置"
 
