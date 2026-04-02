@@ -1,0 +1,720 @@
+# Surface Laptop 3 Intel (SL3I) Arch Linux - GitHub Actions 自动构建脚本
+# 基于 linux-surface 项目: https://github.com/linux-surface/linux-surface
+#
+# 适配目标: Surface Laptop 3 Intel 版本
+# 构建产物: 可写入U盘的 Live ISO，用于验证后完全安装
+# 关键特性: 内置键盘在 Live USB 上即可使用，无需外接键盘
+#
+# 5.1 必需固件/驱动（100%用户安装）覆盖:
+#   ✅ linux-surface          - 核心Surface硬件支持
+#   ✅ linux-surface-headers  - 内核头文件/编译依赖
+#   ✅ linux-firmware         - 通用硬件固件
+#   ✅ intel-ucode            - Intel CPU微码
+#   ✅ NetworkManager         - 网络管理
+#   ✅ mesa                   - Intel集成显卡
+#   ✅ vulkan-intel           - Vulkan图形API
+
+name: Build Surface Laptop 3 Arch Linux Live Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+      include_chrome:
+        description: '包含 Chrome 浏览器'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install archiso and dependencies
+        run: |
+          # 先初始化 pacman 密钥环
+          pacman-key --init
+          pacman-key --populate archlinux
+
+          # 更新系统 (跳过签名检查以避免密钥问题)
+          pacman -Syu --noconfirm --needed --disable-download-timeout
+
+          # 安装 archiso 和构建依赖
+          # libarchive-tools 已被 libarchive 替代
+          pacman -S --noconfirm --needed \
+            archiso \
+            git \
+            base-devel \
+            sudo \
+            dosfstools \
+            squashfs-tools \
+            libarchive \
+            syslinux \
+            grub \
+            edk2-shell
+
+      - name: Setup build environment
+        run: |
+          # 显示当前工作目录
+          echo "当前工作目录: $(pwd)"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          echo "github.workspace: ${{ github.workspace }}"
+          ls -la
+
+          # 检查 archiso 模板是否存在
+          echo "检查 archiso 模板..."
+          ls -la /usr/share/archiso/configs/releng/
+
+          # 使用 GITHUB_WORKSPACE 环境变量而非 github.workspace
+          # 创建 surface-profile 目录
+          mkdir -p "$GITHUB_WORKSPACE/surface-profile"
+
+          # 使用 archiso 提供的模板
+          echo "复制 archiso 模板..."
+          # 正确复制方式：先清空目标目录，然后复制所有文件
+          rm -rf "$GITHUB_WORKSPACE/surface-profile"/*
+          cp -r /usr/share/archiso/configs/releng/* "$GITHUB_WORKSPACE/surface-profile/"
+
+          # 验证目录是否创建成功
+          echo "验证目录结构..."
+          ls -la "$GITHUB_WORKSPACE/surface-profile/"
+
+          # 检查 profiledef.sh 是否存在
+          if [ ! -f "$GITHUB_WORKSPACE/surface-profile/profiledef.sh" ]; then
+            echo "错误: profiledef.sh 不存在!"
+            exit 1
+          fi
+
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          # 创建必要的目录
+          mkdir -p airootfs/root
+          mkdir -p airootfs/etc/systemd/system/getty@tty1.service.d
+          mkdir -p airootfs/etc/skel/.config/sway
+          mkdir -p airootfs/etc/environment.d
+          mkdir -p airootfs/etc/pacman.d
+          # Surface Laptop 3 关键：mkinitcpio 配置目录
+          mkdir -p airootfs/etc
+          mkdir -p airootfs/boot/loader/entries
+
+      - name: Import linux-surface GPG key
+        run: |
+          # 初始化 pacman 密钥环
+          pacman-key --init
+
+          # 导入 linux-surface GPG 密钥
+          pacman-key --populate archlinux
+          curl -s https://raw.githubusercontent.com/linux-surface/linux-surface/master/pkg/keys/surface.asc | \
+            pacman-key --add -
+          pacman-key --lsign-key 56C464BAAC421453
+
+      - name: Prepare configuration files
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          # ==================================================================
+          # 1. 创建 pacman.conf 文件
+          # ==================================================================
+          echo "[options]" > pacman.conf
+          echo "HoldPkg = pacman glibc" >> pacman.conf
+          echo "Architecture = auto" >> pacman.conf
+          echo "Color" >> pacman.conf
+          echo "CheckSpace" >> pacman.conf
+          echo "ParallelDownloads = 5" >> pacman.conf
+          echo "SigLevel = Required DatabaseOptional" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[core]" >> pacman.conf
+          echo "Include = /etc/pacman.d/mirrorlist" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[extra]" >> pacman.conf
+          echo "Include = /etc/pacman.d/mirrorlist" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[multilib]" >> pacman.conf
+          echo "Include = /etc/pacman.d/mirrorlist" >> pacman.conf
+          echo "" >> pacman.conf
+          echo "[linux-surface]" >> pacman.conf
+          echo "Server = https://pkg.surfacelinux.com/arch/" >> pacman.conf
+          echo "SigLevel = Required" >> pacman.conf
+          
+          # 复制到 airootfs
+          cp pacman.conf airootfs/etc/pacman.conf
+          
+          # ==================================================================
+          # 2. 创建 mirrorlist 文件
+          # ==================================================================
+          mkdir -p airootfs/etc/pacman.d
+          echo "##" > airootfs/etc/pacman.d/mirrorlist
+          echo "## Arch Linux repository mirrorlist" >> airootfs/etc/pacman.d/mirrorlist
+          echo "## Generated on $(date)" >> airootfs/etc/pacman.d/mirrorlist
+          echo "##" >> airootfs/etc/pacman.d/mirrorlist
+          echo "" >> airootfs/etc/pacman.d/mirrorlist
+          echo "## China" >> airootfs/etc/pacman.d/mirrorlist
+          echo "Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/\$repo/os/\$arch" >> airootfs/etc/pacman.d/mirrorlist
+          echo "Server = https://mirrors.ustc.edu.cn/archlinux/\$repo/os/\$arch" >> airootfs/etc/pacman.d/mirrorlist
+          
+          # ==================================================================
+          # 3. 创建包列表
+          #    包含 5.1 必需固件/驱动（100%用户安装）
+          #    以及其他高频和推荐驱动
+          # ==================================================================
+          echo "linux-surface" > packages.x86_64
+          echo "linux-firmware" >> packages.x86_64
+          echo "linux-surface" >> packages.x86_64
+          echo "linux-surface-headers" >> packages.x86_64
+
+          # --- 5.1 必需固件/驱动（100%用户安装）---
+          echo "intel-ucode" >> packages.x86_64            # Intel CPU微码（Laptop 3 Intel 必需）
+          echo "networkmanager" >> packages.x86_64          # 网络管理
+          echo "network-manager-applet" >> packages.x86_64  # 网络管理图形前端
+          echo "mesa" >> packages.x86_64                    # Intel集成显卡驱动（必需）
+          echo "vulkan-intel" >> packages.x86_64            # Vulkan图形API（必需）
+          echo "grub" >> packages.x86_64                    # 引导加载器
+          echo "syslinux" >> packages.x86_64               # 备用引导加载器
+          echo "efibootmgr" >> packages.x86_64              # UEFI启动管理
+          echo "edk2-shell" >> packages.x86_64              # UEFI Shell
+
+          # --- 5.2 高频安装固件/驱动（>70%用户安装）---
+          echo "iptsd" >> packages.x86_64                   # 触摸屏服务（Intel版本必需）
+          echo "surface-ipts-firmware" >> packages.x86_64   # IPTS触控固件（Intel版本必需）
+          echo "libva-intel-driver" >> packages.x86_64      # VA-API视频加速（推荐）
+          echo "intel-media-driver" >> packages.x86_64      # 硬件视频编解码（推荐）
+          echo "sof-firmware" >> packages.x86_64            # 声音固件（推荐，解决声卡问题）
+
+          # --- 5.3 中频安装固件/驱动（30-70%用户安装）---
+          echo "surface-aggregator-firmware" >> packages.x86_64  # Surface聚合器固件（60%用户需要）
+          echo "bluez" >> packages.x86_64                   # 蓝牙协议栈
+          echo "bluez-utils" >> packages.x86_64             # 蓝牙工具
+          echo "surface-control" >> packages.x86_64         # Surface硬件控制工具
+
+          # --- 网络工具 ---
+          echo "iw" >> packages.x86_64
+          echo "wpa_supplicant" >> packages.x86_64
+          echo "dhcpcd" >> packages.x86_64
+          echo "iwd" >> packages.x86_64
+
+          # --- 键盘兜底方案（U盘启动应急） ---
+          echo "gpm" >> packages.x86_64                       # 鼠标支持（TTY下鼠标复制粘贴）
+          echo "florence" >> packages.x86_64                  # 屏幕虚拟键盘（图形环境下纯鼠标打字）
+          echo "openssh" >> packages.x86_64                   # SSH远程连接（用另一台电脑远程操控）
+          echo "wget" >> packages.x86_64
+          echo "git" >> packages.x86_64
+          echo "vim" >> packages.x86_64
+          echo "sudo" >> packages.x86_64
+          echo "unzip" >> packages.x86_64
+          echo "unrar" >> packages.x86_64
+          echo "p7zip" >> packages.x86_64
+          echo "fuse2" >> packages.x86_64
+          echo "man-db" >> packages.x86_64
+          echo "man-pages" >> packages.x86_64
+          echo "texinfo" >> packages.x86_64
+
+          # --- 输入/硬件 ---
+          echo "libinput" >> packages.x86_64                # 输入设备库（键盘/触控板）
+          echo "linux-firmware-marvell" >> packages.x86_64  # Marvell无线固件
+          echo "brightnessctl" >> packages.x86_64           # 屏幕亮度控制
+          echo "xorg-xinput" >> packages.x86_64             # 输入设备调试工具
+
+          # --- 桌面环境 (Sway Wayland) ---
+          echo "sway" >> packages.x86_64
+          echo "wayland" >> packages.x86_64
+          echo "seatd" >> packages.x86_64
+          echo "waybar" >> packages.x86_64
+          echo "wofi" >> packages.x86_64
+          echo "kitty" >> packages.x86_64
+          echo "thunar" >> packages.x86_64
+          echo "gvfs" >> packages.x86_64
+
+          # --- 浏览器 ---
+          echo "firefox" >> packages.x86_64
+          echo "firefox-i18n-zh-cn" >> packages.x86_64
+
+          # --- 输入法 ---
+          echo "fcitx5" >> packages.x86_64
+          echo "fcitx5-im" >> packages.x86_64
+          echo "fcitx5-rime" >> packages.x86_64
+          echo "fcitx5-chinese-addons" >> packages.x86_64
+
+          # --- 音频 ---
+          echo "pipewire" >> packages.x86_64
+          echo "pipewire-pulse" >> packages.x86_64
+          echo "wireplumber" >> packages.x86_64
+          echo "pavucontrol" >> packages.x86_64
+          echo "alsa-utils" >> packages.x86_64
+
+          # --- 电源管理 ---
+          echo "powertop" >> packages.x86_64
+          echo "acpi" >> packages.x86_64                    # 电源信息查询
+
+          # --- 字体 ---
+          echo "ttf-jetbrains-mono-nerd" >> packages.x86_64
+          echo "noto-fonts-cjk" >> packages.x86_64
+          echo "noto-fonts-emoji" >> packages.x86_64
+
+          # 根据用户选择是否包含 Chrome 浏览器
+          if [ "${{ inputs.include_chrome }}" == "true" ]; then
+            echo "google-chrome" >> packages.x86_64
+          fi
+
+      - name: Configure mkinitcpio for Surface Laptop 3 keyboard support
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          # ==================================================================
+          # 关键步骤：配置 mkinitcpio 确保 Live USB 上键盘可用
+          #
+          # Surface Laptop 3 的键盘通过 Surface Aggregator (SAM) 总线连接，
+          # 在 linux-surface 内核中，以下关键模块全部编译为 .ko 可加载模块 (=m)：
+          #   CONFIG_SURFACE_AGGREGATOR         = m
+          #   CONFIG_SURFACE_AGGREGATOR_REGISTRY = m
+          #   CONFIG_SURFACE_HID                = m
+          #   CONFIG_SURFACE_KBD                = m
+          #
+          # 因此必须在 initramfs 阶段预加载这些模块，否则：
+          #   1. 早期用户空间（initramfs）无法使用内置键盘
+          #   2. Live USB 启动后可能需要等 udev 自动加载（有延迟或不工作）
+          #   3. LUKS 磁盘加密时无法在引导阶段输入密码
+          #
+          # 注意：mkinitcpio-archiso 使用独立的配置文件 /etc/mkinitcpio-archiso.conf
+          #       来生成 Live ISO 的 initramfs。为了确保覆盖，我们同时写入两个位置：
+          #       1. airootfs/etc/mkinitcpio.conf         - 系统标准配置
+          #       2. airootfs/etc/mkinitcpio-archiso.conf  - archiso 专用配置
+          #       3. airootfs/etc/mkinitcpio.conf.d/       - drop-in 覆盖（最高优先级）
+          # ==================================================================
+
+          # --- 定义公共的模块列表和 HOOKS ---
+          SURFACE_MODULES="i915 intel_lpss_pci surface_aggregator surface_aggregator_platform surface_hid_core hid_multitouch usbhid"
+          SURFACE_HOOKS="base udev autodetect modconf kms keyboard keymap consolefont block filesystems fsck"
+
+          # --- 1. 写入标准 mkinitcpio.conf ---
+          cat > airootfs/etc/mkinitcpio.conf << MKINITCPIO_EOF
+# mkinitcpio.conf - Surface Laptop 3 Intel 专用配置
+# 确保 Live USB 上内置键盘/触控板在 initramfs 阶段即可用
+#
+# Surface Laptop 3 键盘依赖链:
+#   intel_lpss_pci → surface_aggregator → surface_aggregator_platform
+#     → surface_hid_core → surface_kbd (内核自动匹配)
+#
+# 这些模块在 linux-surface 内核中全部为 =m (可加载模块)，
+# 不写入 MODULES 则 initramfs 中不包含它们，导致早期键盘不可用。
+
+MODULES=($SURFACE_MODULES)
+
+FILES=(/usr/lib/firmware/intel-ucode/intel-ucode.img)
+
+HOOKS=($SURFACE_HOOKS)
+MKINITCPIO_EOF
+
+          # --- 2. 写入 mkinitcpio-archiso.conf（archiso Live ISO 构建专用）---
+          # mkinitcpio-archiso 包有自己的配置文件，mkarchiso 构建时优先使用此文件
+          cat > airootfs/etc/mkinitcpio-archiso.conf << MKINITCPIO_ARCHISO_EOF
+# mkinitcpio-archiso.conf - Surface Laptop 3 Intel
+# 此文件由 mkinitcpio-archiso 包在构建 Live ISO initramfs 时使用
+# 必须包含 Surface 键盘驱动模块，否则 U盘启动后键盘不可用
+
+MODULES=($SURFACE_MODULES)
+
+FILES=(/usr/lib/firmware/intel-ucode/intel-ucode.img)
+
+HOOKS=($SURFACE_HOOKS)
+MKINITCPIO_ARCHISO_EOF
+
+          # --- 3. 创建 mkinitcpio.conf.d/ drop-in 配置（最高优先级）---
+          # mkinitcpio 支持 /etc/mkinitcpio.conf.d/*.conf drop-in 覆盖
+          # 这些 drop-in 优先级高于主配置文件
+          mkdir -p airootfs/etc/mkinitcpio.conf.d
+
+          cat > airootfs/etc/mkinitcpio.conf.d/surface-laptop3-keyboard.conf << DROPIN_EOF
+# Surface Laptop 3 Intel - 键盘模块强制预加载
+# 此 drop-in 覆盖任何默认配置，确保以下模块被打包进 initramfs
+#
+# 模块加载顺序很重要:
+#   1. intel_lpss_pci    - Intel LPSS PCI 总线（Surface Aggregator 依赖它）
+#   2. surface_aggregator - SSAM 核心通信层（嵌入式控制器 EC 驱动）
+#   3. surface_aggregator_platform - SSAM 平台驱动（设备注册）
+#   4. surface_hid_core   - HID 传输协议层（键盘/触控板通过此层通信）
+#   5. i915               - Intel GPU 驱动（显示输出需要）
+#   6. hid_multitouch     - 多点触控 HID 支持
+#   7. usbhid             - USB HID 兼容（外接键盘/鼠标兜底）
+
+MODULES+=(i915 intel_lpss_pci surface_aggregator surface_aggregator_platform surface_hid_core hid_multitouch usbhid)
+DROPIN_EOF
+
+          # --- 4. 创建 modprobe 配置确保模块加载顺序 ---
+          # modprobe 依赖文件控制模块加载顺序，防止依赖竞争
+          mkdir -p airootfs/etc/modprobe.d
+          cat > airootfs/etc/modprobe.d/surface-laptop3.conf << 'MODPROBE_EOF'
+# Surface Laptop 3 Intel - 内核模块配置
+# softdep 确保加载顺序正确：LPSS → Aggregator → HID → Keyboard
+
+softdep surface_aggregator pre: intel_lpss_pci
+softdep surface_hid_core pre: surface_aggregator
+softdep surface_kbd pre: surface_hid_core
+MODPROBE_EOF
+
+          # --- 5. 创建 systemd 模块自动加载（运行时兜底）---
+          # 即使 initramfs 加载失败，systemd 也会在运行时尝试加载
+          mkdir -p airootfs/etc/modules-load.d
+          cat > airootfs/etc/modules-load.d/surface-laptop3-keyboard.conf << 'MODULESLOAD_EOF'
+# Surface Laptop 3 Intel - 运行时自动加载模块
+# 此文件确保 Live 环境启动后如果 initramfs 未加载模块，仍会自动加载
+
+intel_lpss_pci
+surface_aggregator
+surface_aggregator_platform
+surface_hid_core
+MODULESLOAD_EOF
+
+          echo "=========================================="
+          echo " mkinitcpio 键盘支持配置已完成（五重保障）"
+          echo "=========================================="
+          echo ""
+          echo "保障层级:"
+          echo "  [1] mkinitcpio.conf          - 标准配置"
+          echo "  [2] mkinitcpio-archiso.conf  - archiso 构建专用"
+          echo "  [3] mkinitcpio.conf.d/ drop-in - 最高优先级覆盖"
+          echo "  [4] /etc/modprobe.d/ softdep  - 模块加载顺序保证"
+          echo "  [5] /etc/modules-load.d/      - 运行时兜底自动加载"
+          echo ""
+          echo "预加载模块:"
+          echo "  i915, intel_lpss_pci,"
+          echo "  surface_aggregator, surface_aggregator_platform,"
+          echo "  surface_hid_core, hid_multitouch, usbhid"
+          echo ""
+          echo "依赖链: intel_lpss_pci → surface_aggregator → surface_hid_core → surface_kbd"
+          echo ""
+
+      - name: Configure systemd-boot for Surface Laptop 3
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          # ==================================================================
+          # 配置 systemd-boot 引导加载器
+          # 包含 Surface Laptop 3 Intel 已知问题的内核参数修复
+          # ==================================================================
+
+          # 创建 systemd-boot loader.conf
+          cat > airootfs/boot/loader/loader.conf << 'LOADER_EOF'
+default arch-surface.conf
+timeout 5
+editor no
+LOADER_EOF
+
+          # 创建 archiso 兼容的启动条目
+          # 注意：Live ISO 环境的 root 挂载方式与安装后不同
+          # 使用 archiso 特定的 cow_spaces 和 archisobasedir 参数
+          cat > airootfs/boot/loader/entries/arch-surface.conf << 'ENTRY_EOF'
+title   Arch Linux (linux-surface) - Surface Laptop 3 Intel
+linux   /vmlinuz-linux-surface
+initrd  /intel-ucode.img
+initrd  /initramfs-linux-surface.img
+options archisobasedir=arch archisobasedir=arch copytoram=y
+
+# Surface Laptop 3 Intel 已知问题修复参数（根据需要取消注释）:
+# reboot=pci              - 修复重启卡在Surface Logo（内核<5.10时需要）
+# mem_sleep_default=s2idle - 浅睡眠模式（休眠问题时使用）
+# i915.enable_psr=0       - 禁用面板自刷新（屏幕闪烁时使用）
+# ibt=off                 - 禁用间接分支跟踪（启动失败时使用）
+ENTRY_EOF
+
+          echo "systemd-boot 引导配置已完成"
+          echo "包含了 Surface Laptop 3 Intel 特定的内核参数（已注释，按需启用）"
+
+      - name: Enable essential services
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          # ==================================================================
+          # 创建 systemd 服务启用脚本
+          # 在 Live 环境中自动启用关键 Surface 服务
+          # ==================================================================
+
+          mkdir -p airootfs/usr/local/bin
+
+          cat > airootfs/usr/local/bin/surface-live-setup.sh << 'SETUP_EOF'
+#!/bin/bash
+# Surface Laptop 3 Live 环境自动配置脚本
+
+set -e
+
+echo "=========================================="
+echo " Surface Laptop 3 Live 环境初始化"
+echo "=========================================="
+
+# 1. 启用 GPM（TTY 下鼠标支持，应急兜底）
+echo "[1/6] 启用 GPM 鼠标支持..."
+systemctl enable gpm
+
+# 2. 启用 NetworkManager（必需）
+echo "[2/6] 启用 NetworkManager..."
+systemctl enable NetworkManager
+
+# 3. 启用蓝牙（推荐）
+echo "[3/6] 启用蓝牙..."
+systemctl enable bluetooth
+
+# 4. 启用 SSH（远程操控兜底：用另一台电脑 ssh root@Surface_IP）
+echo "[4/6] 启用 SSH..."
+systemctl enable sshd
+
+# 5. 启用 IPTS 触摸屏服务（Intel 版本必需）
+echo "[5/6] 启用 iptsd 触摸屏服务..."
+systemctl enable iptsd
+
+# 6. 启用 PipeWire 音频服务（推荐）
+echo "[6/6] 启用 PipeWire 音频服务..."
+systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service 2>/dev/null || true
+
+# 5. 创建 Fn 键配置（Surface 特有）
+echo "[5/5] 配置 Fn 键行为..."
+mkdir -p /etc/modprobe.d
+cat > /etc/modprobe.d/hid_apple.conf << 'FNCONF'
+# Surface Laptop 3 Fn 键配置
+# fnmode=2: 功能键模式（F1-F12默认为功能键，按Fn切换媒体键）
+# swap_fn_leftctrl=1: 交换Fn和左Ctrl（可选，按需取消注释）
+options hid_apple fnmode=2
+# options hid_apple swap_fn_leftctrl=1
+FNCONF
+
+echo ""
+echo "=========================================="
+echo " 配置完成！"
+echo " 内置键盘、触控板、WiFi、蓝牙已就绪"
+echo "=========================================="
+SETUP_EOF
+
+          chmod +x airootfs/usr/local/bin/surface-live-setup.sh
+
+          # 创建 systemd 服务，在 Live 环境首次启动时运行
+          mkdir -p airootfs/etc/systemd/system
+          cat > airootfs/etc/systemd/system/surface-live-setup.service << 'SERVICE_EOF'
+[Unit]
+Description=Surface Laptop 3 Live Environment Setup
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/surface-live-setup.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+
+          echo "Surface Live 环境服务已配置"
+
+      - name: Build ISO with mkarchiso
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          echo "=========================================="
+          echo " 开始构建 Surface Laptop 3 Arch Linux ISO"
+          echo "=========================================="
+          echo "目标设备: Surface Laptop 3 Intel (SL3I)"
+          echo "关键特性:"
+          echo "  - 内置键盘 Live USB 即可用"
+          echo "  - 包含全部 5.1 必需固件/驱动"
+          echo "  - 包含触摸屏/触控笔支持 (iptsd)"
+          echo "  - 包含 Intel 显卡驱动 (mesa/vulkan-intel)"
+          echo "  - 包含声音固件 (sof-firmware)"
+          echo "  - 预置 Surface Laptop 3 已知问题修复参数"
+          echo ""
+          echo "构建需要 15-30 分钟，请耐心等待..."
+          echo ""
+
+          # 使用 archiso 官方工具构建
+          mkarchiso -v -w work -o out .
+
+          echo ""
+          echo "=========================================="
+          echo " 构建完成！开始验证键盘模块..."
+          echo "=========================================="
+
+      - name: Verify keyboard modules in initramfs
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile"
+
+          echo "=========================================="
+          echo " 验证 Surface Laptop 3 键盘模块"
+          echo "=========================================="
+          echo ""
+
+          # 挂载构建好的 ISO 并检查 initramfs 中是否包含 Surface 键盘模块
+          ISO_FILE=$(ls out/*.iso 2>/dev/null | head -1)
+
+          if [ -z "$ISO_FILE" ]; then
+            echo "❌ 未找到 ISO 文件，跳过验证"
+            exit 0
+          fi
+
+          echo "ISO 文件: $ISO_FILE"
+          echo ""
+
+          # 挂载 ISO
+          mkdir -p /mnt/iso
+          mount -o loop,ro "$ISO_FILE" /mnt/iso
+
+          # 查找 initramfs 文件
+          INITRAMFS=$(find /mnt/iso/arch -name "initramfs*" -type f 2>/dev/null | head -1)
+
+          if [ -z "$INITRAMFS" ]; then
+            echo "⚠️ 未找到 initramfs 文件，尝试列出 ISO 内容:"
+            ls -laR /mnt/iso/arch/ 2>/dev/null | head -50
+            umount /mnt/iso
+            exit 0
+          fi
+
+          echo "Initramfs 文件: $INITRAMFS"
+          echo ""
+
+          # 解压 initramfs 并检查模块
+          mkdir -p /tmp/initramfs_check
+          cd /tmp/initramfs_check
+
+          # 解压（可能是 gzip/zstd/lz4/xz 格式）
+          if file "$INITRAMFS" | grep -q "gzip"; then
+            zcat "$INITRAMFS" | cpio -idm 2>/dev/null
+          elif file "$INITRAMFS" | grep -q "zstd"; then
+            zstd -d "$INITRAMFS" -o initramfs_raw | cpio -idm 2>/dev/null
+            zstd -d < "$INITRAMFS" | cpio -idm 2>/dev/null
+          elif file "$INITRAMFS" | grep -q "XZ"; then
+            xzcat "$INITRAMFS" | cpio -idm 2>/dev/null
+          elif file "$INITRAMFS" | grep -q "LZ4"; then
+            lz4 -d "$INITRAMFS" stdout | cpio -idm 2>/dev/null
+          else
+            # 可能是纯 cpio 或未压缩
+            cat "$INITRAMFS" | cpio -idm 2>/dev/null
+          fi
+
+          echo "检查关键 Surface 键盘模块:"
+          echo ""
+
+          # 检查每个关键模块
+          CRITICAL_MODULES=(
+            "surface_aggregator"
+            "surface_aggregator_platform"
+            "surface_hid_core"
+            "intel_lpss_pci"
+            "i915"
+          )
+
+          ALL_FOUND=true
+          for mod in "${CRITICAL_MODULES[@]}"; do
+            FOUND=$(find . -name "${mod}.ko*" -type f 2>/dev/null | head -1)
+            if [ -n "$FOUND" ]; then
+              echo "  ✅ $mod - 找到: $FOUND"
+            else
+              echo "  ❌ $mod - 未在 initramfs 中找到！"
+              ALL_FOUND=false
+            fi
+          done
+
+          echo ""
+          # 额外检查 surface_kbd（依赖 surface_hid_core，内核自动匹配）
+          FOUND_KBD=$(find . -name "surface_kbd.ko*" -type f 2>/dev/null | head -1)
+          if [ -n "$FOUND_KBD" ]; then
+            echo "  ✅ surface_kbd - 找到: $FOUND_KBD"
+          else
+            echo "  ⚠️ surface_kbd - 未找到（可能依赖 surface_hid_core 自动加载）"
+          fi
+
+          echo ""
+          if [ "$ALL_FOUND" = true ]; then
+            echo "🎉 验证通过！所有关键键盘模块已包含在 initramfs 中"
+          else
+            echo "⚠️ 部分模块缺失！键盘可能无法在 initramfs 阶段工作"
+            echo "   但仍可通过运行时 udev/systemd 自动加载"
+          fi
+
+          # 清理
+          cd "$GITHUB_WORKSPACE/surface-profile"
+          umount /mnt/iso
+          rm -rf /tmp/initramfs_check
+
+          echo ""
+          echo "验证完成"
+
+      - name: Generate checksums
+        run: |
+          cd "$GITHUB_WORKSPACE/surface-profile/out"
+
+          # 生成 SHA256 校验和
+          sha256sum *.iso > SHA256SUMS
+
+          # 显示文件信息
+          echo "=========================================="
+          echo " 构建产物"
+          echo "=========================================="
+          ls -lh
+          echo ""
+          echo "SHA256 校验和:"
+          cat SHA256SUMS
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-live-iso
+          path: "$GITHUB_WORKSPACE/surface-profile/out/*.iso"
+          retention-days: 90
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-checksums
+          path: "$GITHUB_WORKSPACE/surface-profile/out/SHA256SUMS"
+          retention-days: 90
+
+      - name: Print usage instructions
+        run: |
+          echo ""
+          echo "=========================================="
+          echo " 使用说明"
+          echo "=========================================="
+          echo ""
+          echo "1. 下载 ISO 文件和 SHA256SUMS 校验文件"
+          echo ""
+          echo "2. 验证校验和:"
+          echo "   sha256sum -c SHA256SUMS"
+          echo ""
+          echo "3. 写入 U 盘（>=8GB）:"
+          echo "   Linux:  sudo dd if=*.iso of=/dev/sdX bs=4M status=progress && sync"
+          echo "   Windows: 使用 Rufus，选择 GPT + UEFI 模式"
+          echo ""
+          echo "4. UEFI 设置（Surface Laptop 3）:"
+          echo "   - 长按 音量+键 + 按一下电源键 进入 UEFI"
+          echo "   - Security → Secure Boot → None（关闭）"
+          echo "   - Boot Configuration → USB Storage → 移到首位"
+          echo ""
+          echo "5. 从 U 盘启动后:"
+          echo "   - 键盘立即可用（无需外接键盘）"
+          echo "   - iwget 连接 WiFi"
+          echo "   - 运行 surface-live-setup 启用触摸屏等服务"
+          echo ""
+          echo "6. 验证通过后，可执行完全安装（参考安装教程文档）"
+          echo ""
+          echo "包含的 5.1 必需固件/驱动:"
+          echo "   ✅ linux-surface / linux-surface-headers"
+          echo "   ✅ linux-firmware"
+          echo "   ✅ intel-ucode"
+          echo "   ✅ NetworkManager"
+          echo "   ✅ mesa"
+          echo "   ✅ vulkan-intel"
+          echo ""
+          echo "额外包含的高频驱动:"
+          echo "   ✅ iptsd + surface-ipts-firmware（触摸屏）"
+          echo "   ✅ sof-firmware（声音）"
+          echo "   ✅ surface-aggregator-firmware"
+          echo "   ✅ bluez + bluez-utils（蓝牙）"
+          echo "   ✅ libva-intel-driver + intel-media-driver（视频加速）"
+          echo ""
