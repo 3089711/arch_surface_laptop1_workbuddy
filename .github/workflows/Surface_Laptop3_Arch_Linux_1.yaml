@@ -192,10 +192,10 @@ jobs:
           echo "sof-firmware" >> packages.x86_64            # 声音固件（推荐，解决声卡问题）
 
           # --- 5.3 中频安装固件/驱动（30-70%用户安装）---
-          echo "surface-aggregator-firmware" >> packages.x86_64  # Surface聚合器固件（60%用户需要）
+          # surface-aggregator-firmware 已包含在 linux-firmware 中，无需单独安装
           echo "bluez" >> packages.x86_64                   # 蓝牙协议栈
           echo "bluez-utils" >> packages.x86_64             # 蓝牙工具
-          echo "surface-control" >> packages.x86_64         # Surface硬件控制工具
+          # surface-control 已弃用，功能由 kernel 参数和 systemd 服务替代
 
           # --- 网络工具 ---
           echo "iw" >> packages.x86_64
@@ -205,7 +205,7 @@ jobs:
 
           # --- 键盘兜底方案（U盘启动应急） ---
           echo "gpm" >> packages.x86_64                       # 鼠标支持（TTY下鼠标复制粘贴）
-          echo "florence" >> packages.x86_64                  # 屏幕虚拟键盘（图形环境下纯鼠标打字）
+          # florence 虚拟键盘需要 AUR，Live ISO 不包含 AUR，已移除
           echo "openssh" >> packages.x86_64                   # SSH远程连接（用另一台电脑远程操控）
           echo "wget" >> packages.x86_64
           echo "git" >> packages.x86_64
@@ -714,7 +714,6 @@ jobs:
           echo "额外包含的高频驱动:"
           echo "   ✅ iptsd + surface-ipts-firmware（触摸屏）"
           echo "   ✅ sof-firmware（声音）"
-          echo "   ✅ surface-aggregator-firmware"
           echo "   ✅ bluez + bluez-utils（蓝牙）"
           echo "   ✅ libva-intel-driver + intel-media-driver（视频加速）"
           echo ""
