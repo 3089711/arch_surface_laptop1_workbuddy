@@ -542,7 +542,11 @@ jobs:
           echo "=========================================="
 
       - name: Verify keyboard modules in initramfs
+        continue-on-error: true
         run: |
+          # 安装验证所需工具（archiso 容器镜像默认不包含这些）
+          pacman -S --noconfirm --needed cpio zstd lz4 xz file 2>/dev/null || true
+
           cd "$GITHUB_WORKSPACE/surface-profile"
 
           echo "=========================================="
