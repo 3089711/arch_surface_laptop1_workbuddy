@@ -699,12 +699,53 @@ jobs:
           path: surface-profile/out/*.iso
           retention-days: 90
 
-      - name: Upload split archive parts
+      - name: Upload split part 01
         uses: actions/upload-artifact@v4
         with:
-          name: surface-laptop3-intel-arch-split-7z
-          path: surface-profile/out/*.7z.*
+          name: surface-laptop3-intel-arch-part-01
+          path: surface-profile/out/*.7z.001
           retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Upload split part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-part-02
+          path: surface-profile/out/*.7z.002
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Upload split part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-part-03
+          path: surface-profile/out/*.7z.003
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Upload split part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-part-04
+          path: surface-profile/out/*.7z.004
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Upload split part 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-part-05
+          path: surface-profile/out/*.7z.005
+          retention-days: 90
+          if-no-files-found: ignore
+
+      - name: Upload split part 06
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-part-06
+          path: surface-profile/out/*.7z.006
+          retention-days: 90
+          if-no-files-found: ignore
 
       - name: Upload checksums
         uses: actions/upload-artifact@v4
