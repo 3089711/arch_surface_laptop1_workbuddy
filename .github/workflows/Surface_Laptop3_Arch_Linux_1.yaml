@@ -649,34 +649,70 @@ jobs:
           echo ""
           echo "验证完成"
 
-      - name: Generate checksums
+      - name: Generate checksums and split archive
         run: |
-          cd "$GITHUB_WORKSPACE/surface-profile/out"
+          OUT_DIR="$GITHUB_WORKSPACE/surface-profile/out"
+          cd "$OUT_DIR"
 
-          # 生成 SHA256 校验和
+          # 生成 SHA256 校验和（对原始 ISO）
           sha256sum *.iso > SHA256SUMS
 
-          # 显示文件信息
+          # 显示原始文件信息
           echo "=========================================="
-          echo " 构建产物"
+          echo " 构建产物（原始）"
           echo "=========================================="
           ls -lh
           echo ""
           echo "SHA256 校验和:"
           cat SHA256SUMS
 
-      - name: Upload ISO artifact
+          # 安装压缩工具
+          pacman -S --noconfirm --needed p7zip 2>/dev/null || true
+
+          ISO_FILE=$(ls *.iso | head -1)
+          ISO_BASE="${ISO_FILE%.iso}"
+
+          echo ""
+          echo "=========================================="
+          echo " 开始分卷压缩（每卷 500MB）"
+          echo "=========================================="
+
+          # 使用 7z 分卷压缩，生成 .7z.001 .7z.002 ... 格式
+          # -v500m: 每卷 500MB
+          # -mx=1:  最快压缩（ISO 已压缩，提速为主）
+          7z a -v500m -mx=1 "${ISO_BASE}.7z" "$ISO_FILE"
+
+          echo ""
+          echo "分卷压缩完成，生成的文件："
+          ls -lh *.7z* 2>/dev/null || ls -lh
+
+          # 为分卷文件生成校验和
+          sha256sum *.7z.* > SHA256SUMS_SPLIT 2>/dev/null || true
+          echo ""
+          echo "分卷文件 SHA256："
+          cat SHA256SUMS_SPLIT 2>/dev/null || true
+
+      - name: Upload original ISO artifact
         uses: actions/upload-artifact@v4
         with:
           name: surface-laptop3-intel-arch-live-iso
-          path: "$GITHUB_WORKSPACE/surface-profile/out/*.iso"
+          path: surface-profile/out/*.iso
+          retention-days: 90
+
+      - name: Upload split archive parts
+        uses: actions/upload-artifact@v4
+        with:
+          name: surface-laptop3-intel-arch-split-7z
+          path: surface-profile/out/*.7z.*
           retention-days: 90
 
       - name: Upload checksums
         uses: actions/upload-artifact@v4
         with:
           name: surface-laptop3-intel-arch-checksums
-          path: "$GITHUB_WORKSPACE/surface-profile/out/SHA256SUMS"
+          path: |
+            surface-profile/out/SHA256SUMS
+            surface-profile/out/SHA256SUMS_SPLIT
           retention-days: 90
 
       - name: Print usage instructions
